@@ -955,18 +955,22 @@ router.post(
         const txnAmount = txn.amount || 0;
         txn.lastBalance = runningBalance;
         const type = txn.transactiontype.toLowerCase();
-        if (type === "deposit" || type === "cashin") {
+        if (
+          type === "deposit" ||
+          type === "cashin" ||
+          type === "adjustin" ||
+          type === "adjust starting balance" ||
+          type === "reverted withdraw"
+        ) {
           txn.currentBalance = runningBalance + txnAmount;
         } else if (
           type === "withdraw" ||
           type === "cashout" ||
-          type === "transactionfee"
+          type === "transactionfee" ||
+          type === "adjustout" ||
+          type === "reverted deposit"
         ) {
           txn.currentBalance = runningBalance - txnAmount;
-        } else if (type === "reverted deposit") {
-          txn.currentBalance = runningBalance - txnAmount;
-        } else if (type === "reverted withdraw") {
-          txn.currentBalance = runningBalance + txnAmount;
         } else {
           txn.currentBalance = runningBalance;
         }
