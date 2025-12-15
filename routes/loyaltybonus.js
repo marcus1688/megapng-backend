@@ -86,9 +86,11 @@ const runLoyaltyBonusCalculation = async (isManual = false) => {
       console.log("Not a calculation day, skipping...");
       return { success: false, message: "Not a calculation day" };
     }
-    const periodLabel = `${moment(periodStart).format("DD-MM-YYYY")} ~ ${moment(
-      periodEnd
-    ).format("DD-MM-YYYY")}`;
+    const periodLabel = `${moment
+      .tz(periodStart, TIMEZONE)
+      .format("DD-MM-YYYY")} ~ ${moment
+      .tz(periodEnd, TIMEZONE)
+      .format("DD-MM-YYYY")}`;
     console.log(`[Loyalty Bonus] Calculating for period: ${periodLabel}`);
     const depositAggregation = await Deposit.aggregate([
       {
