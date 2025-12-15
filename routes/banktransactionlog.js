@@ -1,0 +1,167 @@
+const express = require("express");
+const router = express.Router();
+const BankTransactionLog = require("../models/banktransactionlog.model");
+const Withdraw = require("../models/withdraw.model");
+const Deposit = require("../models/deposit.model");
+const Bonus = require("../models/bonus.model");
+const UserWalletCashOut = require("../models/userwalletcashout.model");
+const UserWalletCashIn = require("../models/userwalletcashin.model");
+const { authenticateAdminToken } = require("../auth/adminAuth");
+const moment = require("moment");
+
+// Admin Get Bank Transaction Log
+router.get(
+  "/admin/api/banktransactionlog",
+  authenticateAdminToken,
+  async (req, res) => {
+    try {
+      const { startDate, endDate } = req.query;
+      const dateFilter = {};
+      if (startDate && endDate) {
+        dateFilter.createdAt = {
+          $gte: moment(new Date(startDate)).utc().toDate(),
+          $lte: moment(new Date(endDate)).utc().toDate(),
+        };
+      }
+      const banktransactionlog = await BankTransactionLog.find({
+        ...dateFilter,
+      }).sort({
+        createdAt: -1,
+      });
+      res.status(200).json({
+        success: true,
+        message: "Bank transaction log retrieved successfully",
+        data: banktransactionlog,
+      });
+    } catch (error) {
+      console.error(
+        "Error occurred while retrieving bank transaction log:",
+        error
+      );
+      res
+        .status(200)
+        .json({ message: "Internal server error", error: error.message });
+    }
+  }
+);
+
+//Admin get Transaction Log
+router.get(
+  "/admin/api/transactionlog",
+  authenticateAdminToken,
+  async (req, res) => {
+    try {
+      const { startDate, endDate } = req.query;
+      const dateFilter = {};
+      if (startDate && endDate) {
+        dateFilter.createdAt = {
+          $gte: moment(new Date(startDate)).utc().toDate(),
+          $lte: moment(new Date(endDate)).utc().toDate(),
+        };
+      }
+      const queryCondition = {
+        status: { $in: ["approved", "rejected", "reverted"] },
+        ...dateFilter,
+      };
+
+      const [deposits, withdraws, bonuses, usercashout, usercashin] =
+        await Promise.all([
+          Deposit.find(queryCondition)
+            .select(
+              "username fullname bankname ownername transfernumber method transactionType amount status remark imageUrl createdAt processBy processtime _id reverted duplicateIP duplicateBank depositname game userid _id userId bankid transactionId"
+            )
+            .lean(),
+          Withdraw.find(queryCondition)
+            .select(
+              "username fullname bankname ownername transfernumber method transactionType amount status remark imageUrl createdAt processBy processtime _id reverted duplicateIP duplicateBank depositname game userid _id userId bankid transactionId"
+            )
+            .lean(),
+          Bonus.find(queryCondition)
+            .select(
+              "username fullname promotionnameEN method transactionType amount status remark createdAt processBy processtime _id reverted imageUrl imageUrls duplicateIP duplicateBank game userid _id userId"
+            )
+            .lean(),
+          UserWalletCashOut.find(queryCondition)
+            .select(
+              "username fullname transactionId walletType transactionType amount status remark method processBy reverted revertedProcessBy createdAt _id duplicateIP duplicateBank game userid _id userId"
+            )
+            .lean(),
+          UserWalletCashIn.find(queryCondition)
+            .select(
+              "username fullname transactionId walletType transactionType amount status remark method processBy reverted revertedProcessBy createdAt _id duplicateIP duplicateBank game userid _id userId"
+            )
+            .lean(),
+        ]);
+
+      const formatTransaction = (transaction, type) => {
+        const commonFields = {
+          _id: transaction._id,
+          username: transaction.username,
+          userId: transaction.userId,
+          userid: transaction.userid,
+          fullname: transaction.fullname,
+          method: transaction.method,
+          transactionType: transaction.transactionType,
+          amount: transaction.amount,
+          status: transaction.status,
+          game: transaction.game,
+          remark: transaction.remark,
+          createdAt: transaction.createdAt,
+          processBy: transaction.processBy,
+          processtime: transaction.processtime,
+          reverted: transaction.reverted,
+          duplicateIP: transaction.duplicateIP,
+          duplicateBank: transaction.duplicateBank,
+        };
+        if (type === "bonus") {
+          return {
+            ...commonFields,
+            promotionnameEN: transaction.promotionnameEN,
+            imageUrl: transaction.imageUrl,
+            imageUrls: transaction.imageUrls,
+          };
+        } else if (type === "walletCashout" || type === "walletCashin") {
+          return {
+            ...commonFields,
+            walletType: transaction.walletType,
+            revertedProcessBy: transaction.revertedProcessBy,
+          };
+        } else {
+          return {
+            ...commonFields,
+            bankname: transaction.bankname,
+            bankid: transaction.bankid,
+            transactionId: transaction.transactionId,
+            ownername: transaction.ownername,
+            transfernumber: transaction.transfernumber,
+            imageUrl: transaction.imageUrl,
+            depositname: transaction.depositname,
+          };
+        }
+      };
+
+      const formattedTransactions = [
+        ...deposits.map((d) => formatTransaction(d, "deposit")),
+        ...withdraws.map((w) => formatTransaction(w, "withdraw")),
+        ...bonuses.map((b) => formatTransaction(b, "bonus")),
+        ...usercashout.map((c) => formatTransaction(c, "walletCashout")),
+        ...usercashin.map((c) => formatTransaction(c, "walletCashin")),
+      ].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+      res.status(200).json({
+        success: true,
+        message: "Filtered transactions fetched successfully",
+        data: formattedTransactions,
+      });
+    } catch (error) {
+      console.error("Error fetching filtered transactions:", error);
+      res.status(200).json({
+        success: false,
+        message: "Error fetching filtered transactions",
+        error: error.toString(),
+      });
+    }
+  }
+);
+
+module.exports = router;

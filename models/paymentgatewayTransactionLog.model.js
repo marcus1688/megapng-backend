@@ -1,0 +1,42 @@
+const mongoose = require("mongoose");
+const moment = require("moment");
+
+const paymentGatewayTransactionLogSchema = new mongoose.Schema(
+  {
+    gatewayId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "paymentgateway",
+    },
+    gatewayName: String,
+    transactiontype: String,
+    amount: Number,
+    lastBalance: Number,
+    currentBalance: Number,
+    remark: {
+      type: String,
+      default: "-",
+    },
+    playerusername: String,
+    processby: String,
+    depositId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Deposit",
+    },
+    withdrawalId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Withdrawal",
+    },
+  },
+  {
+    timestamps: {
+      currentTime: () => moment().utc().toDate(),
+    },
+  }
+);
+
+const PaymentGatewayTransactionLog = mongoose.model(
+  "PaymentGatewayTransactionLog",
+  paymentGatewayTransactionLogSchema
+);
+
+module.exports = PaymentGatewayTransactionLog;
