@@ -52,12 +52,11 @@ const modulePermissions = {
     label: "Blog",
     permissions: [{ value: "bloglist", label: "Blog List" }],
   },
-  hkwin88: {
-    label: "hkwin88",
+  megapng: {
+    label: "megapng",
     permissions: [
       { value: "attendance", label: "Attendance" },
       { value: "loyalty", label: "Loyalty" },
-      { value: "vipmonthlybonus", label: "VIP Monthly Bonus" },
     ],
   },
   mail: {
