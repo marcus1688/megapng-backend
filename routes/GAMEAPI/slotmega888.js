@@ -1556,7 +1556,7 @@ const syncMega888GameHistory = async () => {
   }
 };
 if (process.env.NODE_ENV !== "development") {
-  cron.schedule("*/10 * * * *", async () => {
+  cron.schedule("*/4 * * * *", async () => {
     // Mega888 sync
     // console.log("[Cron] Starting Mega888 sync job");
     try {
