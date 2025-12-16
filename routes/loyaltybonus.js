@@ -161,10 +161,10 @@ const runLoyaltyBonusCalculation = async (isManual = false) => {
   }
 };
 
-// 每个月 1号和16号 12:30am Loyalty Bonus
+// 每个月 1号和16号 12:10am Loyalty Bonus
 if (process.env.NODE_ENV !== "development") {
   cron.schedule(
-    "30 0 1,16 * *",
+    "10 0 1,16 * *",
     async () => {
       console.log(
         `[Loyalty Bonus Cron] Running at ${moment

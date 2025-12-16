@@ -11,10 +11,10 @@ const { adminUser } = require("../models/adminuser.model");
 const TIMEZONE = "Pacific/Port_Moresby";
 const BONUS_POINTS = 58;
 
-// 每个拜1 12:10am Attendace Bonus
+// 每个拜1 12:05am Attendace Bonus
 if (process.env.NODE_ENV !== "development") {
   cron.schedule(
-    "10 0 * * 1",
+    "5 0 * * 1",
     async () => {
       console.log(
         `[${moment()
