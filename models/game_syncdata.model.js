@@ -20,7 +20,7 @@ const gameSyncLogSchema = new mongoose.Schema(
   }
 );
 
-gameSyncLogSchema.index({ createdAt: -1 }, { expireAfterSeconds: 172800 });
+gameSyncLogSchema.index({ createdAt: -1 });
 
 const GameSyncLog = mongoose.model("GameSyncLog", gameSyncLogSchema);
 

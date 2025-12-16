@@ -1083,10 +1083,11 @@ const getLastSyncTime = async () => {
 };
 
 const updateLastSyncTime = async (time) => {
-  await GameSyncLog.create({
-    provider: "mega888",
-    syncTime: time.toDate(),
-  });
+  await GameSyncLog.findOneAndUpdate(
+    { provider: "mega888" },
+    { syncTime: time.toDate() },
+    { upsert: true, new: true }
+  );
 };
 
 // Fetch total report from Mega888 API
