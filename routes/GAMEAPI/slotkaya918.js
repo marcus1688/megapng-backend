@@ -1115,7 +1115,7 @@ router.get(
 
       const user = await User.findById(userId);
 
-      const records = await slotMega888Modal.find({
+      const records = await slotKaya918Modal.find({
         username: user.username,
         betTime: {
           $gte: startDate,
