@@ -20,14 +20,10 @@ const Promotion = require("../models/promotion.model");
 const { v4: uuidv4 } = require("uuid");
 
 const moment = require("moment-timezone");
-
+const TIMEZONE = "Pacific/Port_Moresby";
 function getNextRunTime(hour, minute) {
-  const now = moment().tz("Asia/Kuala_Lumpur");
-  const nextRun = moment()
-    .tz("Asia/Kuala_Lumpur")
-    .hour(hour)
-    .minute(minute)
-    .second(0);
+  const now = moment().tz(TIMEZONE);
+  const nextRun = moment().tz(TIMEZONE).hour(hour).minute(minute).second(0);
   if (nextRun.isBefore(now)) {
     nextRun.add(1, "day");
   }
@@ -57,11 +53,11 @@ if (process.env.NODE_ENV !== "development") {
     },
     {
       scheduled: true,
-      timezone: "Asia/Kuala_Lumpur",
+      timezone: TIMEZONE,
     }
   );
   console.log(
-    `Rebate calculation job scheduled for 12:00 AM (Asia/Kuala_Lumpur). Next run: ${getNextRunTime(
+    `Rebate calculation job scheduled for 12:00 AM (${TIMEZONE}). Next run: ${getNextRunTime(
       0,
       0
     )}`
@@ -80,13 +76,10 @@ router.get(
       if (startDate && endDate) {
         dateFilter.rebateissuesdate = {
           $gte: moment
-            .tz(new Date(startDate), "Asia/Kuala_Lumpur")
+            .tz(new Date(startDate), TIMEZONE)
             .startOf("day")
             .toDate(),
-          $lte: moment
-            .tz(new Date(endDate), "Asia/Kuala_Lumpur")
-            .endOf("day")
-            .toDate(),
+          $lte: moment.tz(new Date(endDate), TIMEZONE).endOf("day").toDate(),
         };
       }
 
@@ -305,25 +298,18 @@ async function runRebateCalculation() {
   try {
     const schedule = await RebateSchedule.findOne();
     if (!schedule) return;
-    const now = moment().tz("Asia/Kuala_Lumpur");
+    const now = moment().tz(TIMEZONE);
     const yesterday = moment(now).subtract(1, "day");
     const startDate = yesterday.startOf("day").toDate();
     const endDate = yesterday.endOf("day").toDate();
     const yesterdayString = yesterday.format("DD-MM-YYYY");
-    if (schedule.calculationType === "winlose") {
-      await calculateWinLoseRebate(
-        schedule.winLosePercentage,
-        startDate,
-        endDate,
-        yesterdayString
-      );
-    } else {
-      await calculateTurnoverRebate(
-        schedule.categoryPercentages,
-        startDate,
-        endDate
-      );
-    }
+
+    await calculateWinLoseRebate(
+      schedule.winLosePercentage,
+      startDate,
+      endDate,
+      yesterdayString
+    );
   } catch (error) {
     console.error("Rebate calculation error:", error);
     throw error;

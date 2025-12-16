@@ -512,9 +512,9 @@ router.post("/api/register", async (req, res) => {
   }
   const normalizedUsername = username.toLowerCase();
   const cleanedFullname = fullname.trim().replace(/\s+/g, " ");
-  const formattedNumber = String(phonenumber).startsWith("852")
+  const formattedNumber = String(phonenumber).startsWith("675")
     ? String(phonenumber)
-    : `852${phonenumber}`;
+    : `675${phonenumber}`;
 
   const normalizedFullname = cleanedFullname.toLowerCase();
   let clientIp = req.headers["x-forwarded-for"] || req.ip;
@@ -2907,7 +2907,7 @@ router.post(
     const formattedPhoneNumbers = phoneNumbers.map((phone) => {
       const phoneStr = String(phone);
       if (phoneStr.length === 8) {
-        return `852${phoneStr}`;
+        return `675${phoneStr}`;
       }
       return phoneStr;
     });
@@ -3196,7 +3196,7 @@ router.put(
         formattedPhoneNumbers = phoneNumbers
           .filter((p) => p && p.toString().trim() !== "")
           .map((phone) =>
-            String(phone).startsWith("852") ? String(phone) : `852${phone}`
+            String(phone).startsWith("675") ? String(phone) : `675${phone}`
           );
         primaryPhone = formattedPhoneNumbers[0];
         const existingPhoneNumber = await User.findOne({
@@ -5903,7 +5903,7 @@ router.post(
     const API_URL = process.env.API_URL || "http://localhost:3001/api/";
 
     for (const user of users) {
-      const { id, fullname, phoneNumbers } = user;
+      const { id, fullname, phoneNumbers, bankAccounts } = user;
       if (!fullname || !phoneNumbers?.length) {
         results.failed.push({
           id,
@@ -5917,7 +5917,7 @@ router.post(
       const formattedPhoneNumbers = phoneNumbers.map((phone) => {
         const phoneStr = String(phone);
         if (phoneStr.length === 8) {
-          return `852${phoneStr}`;
+          return `675${phoneStr}`;
         }
         return phoneStr;
       });
@@ -5951,6 +5951,7 @@ router.post(
           password: hashedPassword,
           phonenumber: primaryPhone,
           phoneNumbers: formattedPhoneNumbers,
+          bankAccounts: bankAccounts || [],
           registerIp: "csv import",
           referralLink,
           referralCode: newReferralCode,
@@ -5996,6 +5997,287 @@ router.post(
       },
       data: results,
     });
+  }
+);
+
+// Reset all users totaldeposit to 0
+router.post(
+  "/admin/api/reset-all-totaldeposit",
+  authenticateAdminToken,
+  async (req, res) => {
+    try {
+      const result = await User.updateMany({}, { $set: { totaldeposit: 0 } });
+
+      res.status(200).json({
+        success: true,
+        message: {
+          en: `Reset complete. ${result.modifiedCount} users updated.`,
+          zh: `重置完成。已更新 ${result.modifiedCount} 个用户。`,
+        },
+        data: {
+          matched: result.matchedCount,
+          modified: result.modifiedCount,
+        },
+      });
+    } catch (error) {
+      console.error("Error resetting totaldeposit:", error);
+      res.status(500).json({
+        success: false,
+        message: {
+          en: "Internal server error",
+          zh: "服务器内部错误",
+        },
+      });
+    }
+  }
+);
+
+// Import Deposits from CSV
+router.post(
+  "/admin/api/import-deposits",
+  authenticateAdminToken,
+  async (req, res) => {
+    try {
+      const { deposits } = req.body;
+
+      if (!deposits || !Array.isArray(deposits) || !deposits.length) {
+        return res.status(200).json({
+          success: false,
+          message: {
+            en: "No deposits to import",
+            zh: "没有存款数据",
+          },
+        });
+      }
+
+      const results = {
+        success: [],
+        failed: [],
+        skipped: [],
+      };
+
+      for (const item of deposits) {
+        const { userid, dateTimeHK, amount, remark } = item;
+
+        if (!userid || !amount) {
+          results.failed.push({ userid, reason: "Missing userid or amount" });
+          continue;
+        }
+
+        try {
+          // 找用户
+          const user = await User.findOne({ userid: parseInt(userid) });
+          if (!user) {
+            results.failed.push({ userid, reason: "User not found" });
+            continue;
+          }
+
+          // UTC+8 转 UTC
+          const transactionDate = new Date(dateTimeHK);
+          const transactionId = uuidv4();
+          const depositAmount = Math.abs(amount);
+
+          const newDeposit = new Deposit({
+            transactionId,
+            userId: user._id,
+            userid: user.userid,
+            username: user.username,
+            fullname: user.fullname,
+            bankid: null,
+            bankname: null,
+            ownername: null,
+            transfernumber: null,
+            walletType: "Main",
+            transactionType: "deposit",
+            processBy: "csv import",
+            amount: depositAmount,
+            bankAmount: null,
+            walletamount: null,
+            method: "import",
+            status: "approved",
+            remark: remark || "csv import",
+            game: null,
+            processtime: "0s",
+            duplicateIP: false,
+            duplicateBank: false,
+            newDeposit: false,
+            createdAt: transactionDate,
+            updatedAt: transactionDate,
+          });
+
+          await newDeposit.save();
+
+          // 更新 user totaldeposit
+          await User.findByIdAndUpdate(user._id, {
+            $inc: { totaldeposit: depositAmount },
+          });
+
+          // 创建 UserWalletLog
+          await UserWalletLog.create({
+            userId: user._id,
+            transactionid: transactionId,
+            transactiontime: transactionDate,
+            transactiontype: "deposit",
+            amount: depositAmount,
+            status: "approved",
+            remark: remark || "csv import",
+            game: null,
+            createdAt: transactionDate,
+            updatedAt: transactionDate,
+          });
+
+          results.success.push({
+            userid,
+            amount: depositAmount,
+            date: transactionDate,
+          });
+        } catch (error) {
+          results.failed.push({ userid, reason: error.message });
+        }
+      }
+
+      res.status(200).json({
+        success: true,
+        message: {
+          en: `Import complete. Success: ${results.success.length}, Failed: ${results.failed.length}`,
+          zh: `导入完成。成功: ${results.success.length}, 失败: ${results.failed.length}`,
+        },
+        data: results,
+      });
+    } catch (error) {
+      console.error("Error importing deposits:", error);
+      res.status(500).json({
+        success: false,
+        message: {
+          en: "Internal server error",
+          zh: "服务器内部错误",
+        },
+      });
+    }
+  }
+);
+
+// Import Withdraws from CSV
+router.post(
+  "/admin/api/import-withdraws",
+  authenticateAdminToken,
+  async (req, res) => {
+    try {
+      const { withdraws } = req.body;
+
+      if (!withdraws || !Array.isArray(withdraws) || !withdraws.length) {
+        return res.status(200).json({
+          success: false,
+          message: {
+            en: "No withdraws to import",
+            zh: "没有提款数据",
+          },
+        });
+      }
+
+      const results = {
+        success: [],
+        failed: [],
+        skipped: [],
+      };
+
+      for (const item of withdraws) {
+        const { userid, dateTimeHK, amount, remark } = item;
+
+        if (!userid || !amount) {
+          results.failed.push({ userid, reason: "Missing userid or amount" });
+          continue;
+        }
+
+        try {
+          // 找用户
+          const user = await User.findOne({ userid: parseInt(userid) });
+          if (!user) {
+            results.failed.push({ userid, reason: "User not found" });
+            continue;
+          }
+
+          // UTC+8 转 UTC
+          const transactionDate = new Date(dateTimeHK);
+          const transactionId = uuidv4();
+          const withdrawAmount = Math.abs(amount);
+
+          const newWithdraw = new Withdraw({
+            transactionId,
+            userId: user._id,
+            userid: user.userid,
+            username: user.username,
+            fullname: user.fullname,
+            bankid: null,
+            bankname: null,
+            ownername: null,
+            transfernumber: null,
+            walletType: "Main",
+            transactionType: "withdraw",
+            processBy: "csv import",
+            amount: withdrawAmount,
+            bankAmount: null,
+            walletamount: null,
+            method: "import",
+            status: "approved",
+            remark: remark || "csv import",
+            game: null,
+            processtime: "0s",
+            duplicateIP: false,
+            duplicateBank: false,
+            createdAt: transactionDate,
+            updatedAt: transactionDate,
+          });
+
+          await newWithdraw.save();
+
+          // 更新 user totalwithdraw
+          await User.findByIdAndUpdate(user._id, {
+            $inc: { totalwithdraw: withdrawAmount },
+          });
+
+          // 创建 UserWalletLog
+          await UserWalletLog.create({
+            userId: user._id,
+            transactionid: transactionId,
+            transactiontime: transactionDate,
+            transactiontype: "withdraw",
+            amount: withdrawAmount,
+            status: "approved",
+            remark: remark || "csv import",
+            game: null,
+            createdAt: transactionDate,
+            updatedAt: transactionDate,
+          });
+
+          results.success.push({
+            userid,
+            amount: withdrawAmount,
+            date: transactionDate,
+          });
+        } catch (error) {
+          results.failed.push({ userid, reason: error.message });
+        }
+      }
+
+      res.status(200).json({
+        success: true,
+        message: {
+          en: `Import complete. Success: ${results.success.length}, Failed: ${results.failed.length}`,
+          zh: `导入完成。成功: ${results.success.length}, 失败: ${results.failed.length}`,
+        },
+        data: results,
+      });
+    } catch (error) {
+      console.error("Error importing withdraws:", error);
+      res.status(500).json({
+        success: false,
+        message: {
+          en: "Internal server error",
+          zh: "服务器内部错误",
+        },
+      });
+    }
   }
 );
 
