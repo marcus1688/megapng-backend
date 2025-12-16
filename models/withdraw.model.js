@@ -23,15 +23,12 @@ const withdrawSchema = new mongoose.Schema(
     },
     bankname: {
       type: String,
-      required: true,
     },
     ownername: {
       type: String,
-      required: true,
     },
     transfernumber: {
       type: String,
-      required: true,
     },
     transactionType: {
       type: String,
