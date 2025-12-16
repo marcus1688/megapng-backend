@@ -315,14 +315,10 @@ const userSchema = new mongoose.Schema(
       // habanero: { type: gameLockSchema, default: () => ({}) },
     },
     gameStatus: {
-      jokerx2: { type: gameStatusSchema, default: () => ({}) },
-      jokerx5: { type: gameStatusSchema, default: () => ({}) },
-      // mega888: { type: gameStatusSchema, default: () => ({}) },
-      // xe88: { type: gameStatusSchema, default: () => ({}) },
-      // kiss918: { type: gameStatusSchema, default: () => ({}) },
+      mega888: { type: gameStatusSchema, default: () => ({}) },
     },
     gameSuspendStatus: {
-      joker: { type: gameLockSchema, default: () => ({}) },
+      mega888: { type: gameLockSchema, default: () => ({}) },
     },
     lastForcedLogout: { type: Date, default: null },
     luckySpinCount: {
@@ -333,16 +329,16 @@ const userSchema = new mongoose.Schema(
       type: userLuckySpinSettingSchema,
       default: () => ({ settings: [], remainingCount: 0 }),
     },
-    jokerGameName: {
+    mega888GameName: {
       type: String,
     },
-    jokerGamePW: {
+    mega888GamePW: {
       type: String,
     },
-    jokerGameTwoName: {
+    pastMega888GameName: {
       type: String,
     },
-    jokerGameTwoPW: {
+    pastMega888GamePW: {
       type: String,
     },
   },

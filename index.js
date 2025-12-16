@@ -72,8 +72,8 @@ const GamelistRouter = require("./routes/gamelist");
 const adminListRouter = require("./routes/adminlist");
 const notificationRouter = require("./routes/notification");
 
-const slotJokerRouter = require("./routes/GAMEAPI/slotjoker");
-const slotLive22Router = require("./routes/GAMEAPI/slotlive22");
+const slotMega888Router = require("./routes/GAMEAPI/slotmega888");
+const slotMega888LoginRouter = require("./routes/GAMEAPI/slot_mega888login");
 
 const ALLGameFunctionRouter = require("./routes/GAMEAPI/0_GameFunction");
 const ALLGameStatusRouter = require("./routes/GAMEAPI/0_GameStatus");
@@ -150,6 +150,8 @@ app.use(
     crossOriginEmbedderPolicy: false,
   })
 );
+
+app.use(slotMega888LoginRouter);
 
 app.use(
   express.json({
@@ -744,8 +746,7 @@ app.use(LoyaltyBonusRouter);
 app.use(adminListRouter);
 app.use(notificationRouter);
 
-app.use(slotJokerRouter);
-app.use(slotLive22Router);
+app.use(slotMega888Router);
 
 app.use(ALLGameFunctionRouter);
 app.use(ALLGameStatusRouter);
