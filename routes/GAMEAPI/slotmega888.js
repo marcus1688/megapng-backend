@@ -73,13 +73,6 @@ async function GameWalletLogAttempt(
 
 const mega888CheckBalance = async (user) => {
   try {
-    if (!user.mega888GameName) {
-      return {
-        success: true,
-        balance: 0,
-      };
-    }
-
     const random = String(Date.now());
     const digest = generateMD5Hash(
       random + mega888SN + user.mega888GameName + mega888Secret
@@ -639,18 +632,18 @@ router.post(
       if (!withdrawResponse.success) {
         console.error("MEGA888: Withdraw failed -", withdrawResponse.error);
 
-        // if (withdrawResponse.error.error.code === "37123") {
-        //   return res.status(200).json({
-        //     success: false,
-        //     message: {
-        //       en: "Insufficient game balance to complete withdrawal.",
-        //       zh: "游戏余额不足，无法完成提款。",
-        //       ms: "Baki permainan tidak mencukupi untuk melengkapkan pengeluaran.",
-        //       zh_hk: "遊戲餘額不足，無法完成提款。",
-        //       id: "Saldo permainan tidak mencukupi untuk menyelesaikan penarikan.",
-        //     },
-        //   });
-        // }
+        if (withdrawResponse.error.error.code === "37123") {
+          return res.status(200).json({
+            success: false,
+            message: {
+              en: "Insufficient game balance to complete withdrawal.",
+              zh: "游戏余额不足，无法完成提款。",
+              ms: "Baki permainan tidak mencukupi untuk melengkapkan pengeluaran.",
+              zh_hk: "遊戲餘額不足，無法完成提款。",
+              id: "Saldo permainan tidak mencukupi untuk menyelesaikan penarikan.",
+            },
+          });
+        }
 
         return res.status(200).json({
           success: false,
@@ -959,94 +952,6 @@ router.post(
   }
 );
 
-router.post("/api/mega888/getturnoverforrebate", async (req, res) => {
-  try {
-    const { date } = req.body;
-
-    let startDate, endDate;
-    if (date === "today") {
-      startDate = moment
-        .utc()
-        .add(8, "hours")
-        .startOf("day")
-        .subtract(8, "hours")
-        .toDate();
-      endDate = moment
-        .utc()
-        .add(8, "hours")
-        .endOf("day")
-        .subtract(8, "hours")
-        .toDate();
-    } else if (date === "yesterday") {
-      startDate = moment
-        .utc()
-        .add(8, "hours")
-        .subtract(1, "days")
-        .startOf("day")
-        .subtract(8, "hours")
-        .toDate();
-
-      endDate = moment
-        .utc()
-        .add(8, "hours")
-        .subtract(1, "days")
-        .endOf("day")
-        .subtract(8, "hours")
-        .toDate();
-    }
-
-    console.log("MEGA888 QUERYING TIME", startDate, endDate);
-
-    const records = await slotMega888Modal.find({
-      betTime: {
-        $gte: startDate,
-        $lt: endDate,
-      },
-    });
-
-    let playerSummary = {};
-
-    records.forEach((record) => {
-      const username = record.username;
-
-      if (!playerSummary[username]) {
-        playerSummary[username] = { turnover: 0, winloss: 0 };
-      }
-
-      playerSummary[username].turnover += record.betamount || 0;
-
-      playerSummary[username].winloss +=
-        (record.settleamount || 0) - (record.betamount || 0);
-    });
-
-    Object.keys(playerSummary).forEach((playerId) => {
-      playerSummary[playerId].turnover = Number(
-        playerSummary[playerId].turnover.toFixed(2)
-      );
-      playerSummary[playerId].winloss = Number(
-        playerSummary[playerId].winloss.toFixed(2)
-      );
-    });
-    return res.status(200).json({
-      success: true,
-      summary: {
-        gamename: "MEGA888",
-        gamecategory: "Slot Games",
-        users: playerSummary,
-      },
-    });
-  } catch (error) {
-    console.log("MEGA888: Failed to fetch win/loss report:", error.message);
-    return res.status(500).json({
-      success: false,
-      message: {
-        en: "MEGA888: Failed to fetch win/loss report",
-        zh: "MEGA888: 获取盈亏报告失败",
-      },
-    });
-  }
-});
-
 router.get(
   "/admin/api/mega888/:userId/dailygamedata",
   authenticateAdminToken,
@@ -1093,203 +998,6 @@ router.get(
       });
     } catch (error) {
       console.log("MEGA888: Failed to fetch win/loss report:", error.message);
-      return res.status(500).json({
-        success: false,
-        message: {
-          en: "MEGA888: Failed to fetch win/loss report",
-          zh: "MEGA888: 获取盈亏报告失败",
-        },
-      });
-    }
-  }
-);
-
-router.get(
-  "/admin/api/mega888/:userId/gamedata",
-  authenticateAdminToken,
-  async (req, res) => {
-    try {
-      const { startDate, endDate } = req.query;
-
-      const userId = req.params.userId;
-
-      const user = await User.findById(userId);
-
-      const records = await GameDataLog.find({
-        username: user.username,
-        date: {
-          $gte: moment(new Date(startDate))
-            .utc()
-            .add(8, "hours")
-            .format("YYYY-MM-DD"),
-          $lte: moment(new Date(endDate))
-            .utc()
-            .add(8, "hours")
-            .format("YYYY-MM-DD"),
-        },
-      });
-
-      let totalTurnover = 0;
-      let totalWinLoss = 0;
-
-      // Sum up the values for EVOLUTION under Live Casino
-      records.forEach((record) => {
-        // Convert Mongoose Map to Plain Object
-        const gameCategories =
-          record.gameCategories instanceof Map
-            ? Object.fromEntries(record.gameCategories)
-            : record.gameCategories;
-
-        if (
-          gameCategories &&
-          gameCategories["Slot Games"] &&
-          gameCategories["Slot Games"] instanceof Map
-        ) {
-          const slotGames = Object.fromEntries(gameCategories["Slot Games"]);
-
-          if (slotGames["MEGA888"]) {
-            totalTurnover += slotGames["MEGA888"].turnover || 0;
-            totalWinLoss += slotGames["MEGA888"].winloss || 0;
-          }
-        }
-      });
-
-      // Format the total values to two decimal places
-      totalTurnover = Number(totalTurnover.toFixed(2));
-      totalWinLoss = Number(totalWinLoss.toFixed(2));
-
-      return res.status(200).json({
-        success: true,
-        summary: {
-          gamename: "MEGA888",
-          gamecategory: "Slot Games",
-          user: {
-            username: user.username,
-            turnover: totalTurnover,
-            winloss: totalWinLoss,
-          },
-        },
-      });
-    } catch (error) {
-      console.log("MEGA888: Failed to fetch win/loss report:", error.message);
-      return res.status(500).json({
-        success: false,
-        message: {
-          en: "MEGA888: Failed to fetch win/loss report",
-          zh: "MEGA888: 获取盈亏报告失败",
-        },
-      });
-    }
-  }
-);
-
-// router.get(
-//   "/admin/api/mega888/dailykioskreport",
-//   authenticateAdminToken,
-//   async (req, res) => {
-//     try {
-//       const { startDate, endDate } = req.query;
-
-//       let startD = moment.utc(new Date(startDate).toISOString());
-//       let endD = moment.utc(new Date(endDate).toISOString());
-
-//       const start = startD.format("YYYY-MM-DD HH:mm:ss");
-//       const end = endD.format("YYYY-MM-DD HH:mm:ss");
-
-//       const random = String(Date.now());
-
-//       // Generate digest using MD5 hash
-//       const digest = generateMD5Hash(
-//         random + mega888SN + mega888AgentId + mega888Secret
-//       );
-
-//       const payload = buildParams(
-//         {
-//           sn: mega888SN,
-//           random: random,
-//           agentLoginId: mega888AgentId,
-//           digest: digest,
-//           type: 1,
-//           startTime: start,
-//           endTime: end,
-//         },
-//         "open.mega.player.total.report"
-//       );
-//       const response = await axios.post(mega888APIURL, payload);
-
-//       if (response.data.error) {
-//         return res.status(500).json({
-//           success: false,
-//           error: response.data.error.message,
-//         });
-//       }
-
-//       // Calculate totals for all records
-//       const totals = response.data.result.reduce(
-//         (acc, entry) => {
-//           acc.turnover += parseFloat(entry.bet || 0);
-//           acc.winloss -= parseFloat(entry.win || 0); // Negative of win
-//           return acc;
-//         },
-//         { turnover: 0, winloss: 0 }
-//       );
-
-//       return res.status(200).json({
-//         success: true,
-//         summary: {
-//           gamename: "MEGA888",
-//           gamecategory: "Slot Games",
-//           totalturnover: Number(totals.turnover.toFixed(2)),
-//           totalwinloss: Number(totals.winloss.toFixed(2)),
-//         },
-//       });
-//     } catch (error) {
-//       console.error("MEGA888: Failed to fetch win/loss report:", error);
-//       return res.status(500).json({
-//         success: false,
-//         message: {
-//           en: "MEGA888: Failed to fetch win/loss report",
-//           zh: "MEGA888: 获取盈亏报告失败",
-//         },
-//       });
-//     }
-//   }
-// );
-
-router.get(
-  "/admin/api/mega888/dailykioskreport",
-  authenticateAdminToken,
-  async (req, res) => {
-    try {
-      const { startDate, endDate } = req.query;
-
-      const records = await slotMega888Modal.find({
-        betTime: {
-          $gte: moment(new Date(startDate)).utc().toDate(),
-          $lte: moment(new Date(endDate)).utc().toDate(),
-        },
-      });
-
-      let totalTurnover = 0;
-      let totalWinLoss = 0;
-
-      records.forEach((record) => {
-        totalTurnover += record.betamount || 0;
-
-        totalWinLoss += (record.betamount || 0) - (record.settleamount || 0);
-      });
-
-      return res.status(200).json({
-        success: true,
-        summary: {
-          gamename: "MEGA888",
-          gamecategory: "Slot Games",
-          totalturnover: Number(totalTurnover.toFixed(2)),
-          totalwinloss: Number(totalWinLoss.toFixed(2)),
-        },
-      });
-    } catch (error) {
-      console.error("MEGA888: Failed to fetch win/loss report:", error);
       return res.status(500).json({
         success: false,
         message: {
@@ -1860,3 +1568,4 @@ if (process.env.NODE_ENV !== "development") {
 }
 
 module.exports = router;
+module.exports.mega888CheckBalance = mega888CheckBalance;
