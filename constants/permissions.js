@@ -53,7 +53,7 @@ const modulePermissions = {
     permissions: [{ value: "bloglist", label: "Blog List" }],
   },
   megapng: {
-    label: "megapng",
+    label: "Megapng",
     permissions: [
       { value: "attendance", label: "Attendance" },
       { value: "loyalty", label: "Loyalty" },
