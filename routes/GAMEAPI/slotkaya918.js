@@ -1255,7 +1255,11 @@ const kaya918GetBetList = async (startTime, endTime) => {
     };
 
     const bodyJson = JSON.stringify(requestBody);
-    const cipher = crypto.createCipheriv("aes-128-ecb", kaya918AESKey, null);
+
+    // Ensure AES key is a Buffer of 16 bytes
+    const aesKeyBuffer = Buffer.from(kaya918AESKey, "utf8");
+
+    const cipher = crypto.createCipheriv("aes-128-ecb", aesKeyBuffer, null);
     cipher.setAutoPadding(true);
     let encrypted = cipher.update(bodyJson, "utf8", "base64");
     encrypted += cipher.final("base64");
@@ -1265,6 +1269,9 @@ const kaya918GetBetList = async (startTime, endTime) => {
       .update(encrypted + kaya918MD5Key)
       .digest("hex")
       .toLowerCase();
+
+    console.log("918KAYA Request Body:", requestBody);
+    console.log("918KAYA AES-ENCODE:", aesEncode);
 
     const response = await axios.post(
       `${kaya918APIURL}v1/betlist`,
@@ -1453,7 +1460,6 @@ const syncKaya918GameHistory = async () => {
   }
 };
 
-kaya918GetBetList();
 module.exports = router;
 module.exports.kaya918CheckBalance = kaya918CheckBalance;
 module.exports.syncKaya918GameHistory = syncKaya918GameHistory;
