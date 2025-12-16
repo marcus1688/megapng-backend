@@ -78,7 +78,7 @@ router.post("/api/mega888", express.raw({ type: "*/*" }), async (req, res) => {
     }
 
     const user = await User.findOne(
-      { mega888GameID: loginId },
+      { mega888GameName: loginId },
       { mega888GamePW: 1 }
     ).lean();
 
