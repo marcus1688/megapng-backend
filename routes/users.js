@@ -3032,7 +3032,7 @@ router.post(
 
       if (freeCreditApply) {
         try {
-          const selectedKiosk = await Kiosk.findOne({ name: /joker x2/i });
+          const selectedKiosk = await Kiosk.findOne({ name: /Kaya918/i });
           const freeCreditPromotion = await Promotion.findOne({
             $or: [
               { maintitleEN: { $regex: /Free Credit/i } },
@@ -3042,9 +3042,9 @@ router.post(
 
           if (selectedKiosk && freeCreditPromotion) {
             const bonusAmount = Number(freeCreditPromotion.bonusexact);
-            const transferAmount = bonusAmount / 2; // ✅ Transfer In 是 bonusexact / 2
+            const transferAmount = bonusAmount;
 
-            // Step 1: Transfer In (bonusexact / 2)
+            // Step 1: Transfer In (bonusexact)
             const transferUrl = `${API_URL}${selectedKiosk.transferInAPI}/${newUser._id}`;
             const transferResponse = await fetch(transferUrl, {
               method: "POST",
