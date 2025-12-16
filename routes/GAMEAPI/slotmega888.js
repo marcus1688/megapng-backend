@@ -18,7 +18,7 @@ const qs = require("querystring");
 const GameWalletLog = require("../../models/gamewalletlog.model");
 const slotMega888Modal = require("../../models/slot_mega888.model");
 const GameSyncLog = require("../../models/game_syncdata.model");
-const { syncKaya918GameHistory } = require("../../models/slot_918kaya.model");
+const { syncKaya918GameHistory } = require("./slotkaya918");
 const cron = require("node-cron");
 
 require("dotenv").config();
