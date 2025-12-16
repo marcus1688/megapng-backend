@@ -16,7 +16,7 @@ const jwt = require("jsonwebtoken");
 const moment = require("moment");
 const qs = require("querystring");
 const GameWalletLog = require("../../models/gamewalletlog.model");
-const slotMega888Modal = require("../../models/slot_mega888.model");
+const slotKaya918Modal = require("../../models/slot_918kaya.model");
 const GameSyncLog = require("../../models/game_syncdata.model");
 const cron = require("node-cron");
 
@@ -1115,7 +1115,7 @@ router.get(
 
       const user = await User.findById(userId);
 
-      const records = await slotMega888Modal.find({
+      const records = await slotKaya918Modal.find({
         username: user.username,
         betTime: {
           $gte: startDate,
@@ -1226,5 +1226,240 @@ router.get(
   }
 );
 
+const getKaya918LastSyncTime = async () => {
+  const syncLog = await GameSyncLog.findOne({ provider: "kaya918" })
+    .sort({ syncTime: -1 })
+    .lean();
+  return syncLog?.syncTime || null;
+};
+
+// Update or create sync time for kaya918
+const updateKaya918LastSyncTime = async (time) => {
+  await GameSyncLog.findOneAndUpdate(
+    { provider: "kaya918" },
+    { syncTime: time },
+    { upsert: true, new: true }
+  );
+};
+
+// Fetch bet list from 918 Kaya API
+const kaya918GetBetList = async (startTime, endTime) => {
+  try {
+    const timestamp = Math.floor(Date.now() / 1000);
+
+    const requestBody = {
+      agentID: kaya918AgentID,
+      startUpdateTime: startTime.toString(),
+      endUpdateTime: endTime.toString(),
+      timeStamp: timestamp,
+    };
+
+    const bodyJson = JSON.stringify(requestBody);
+
+    // Ensure AES key is a Buffer of 16 bytes
+    const aesKeyBuffer = Buffer.from(kaya918AESKey, "utf8");
+
+    const cipher = crypto.createCipheriv("aes-128-ecb", aesKeyBuffer, null);
+    cipher.setAutoPadding(true);
+    let encrypted = cipher.update(bodyJson, "utf8", "base64");
+    encrypted += cipher.final("base64");
+
+    const aesEncode = crypto
+      .createHash("md5")
+      .update(encrypted + kaya918MD5Key)
+      .digest("hex")
+      .toLowerCase();
+
+    console.log("918KAYA Request Body:", requestBody);
+    console.log("918KAYA AES-ENCODE:", aesEncode);
+
+    const response = await axios.post(
+      `${kaya918APIURL}v1/betlist`,
+      requestBody,
+      {
+        headers: {
+          "Content-Type": "application/json",
+          "AES-ENCODE": aesEncode,
+          "Accept-Encoding": "gzip",
+        },
+      }
+    );
+
+    if (response.data.rtStatus !== 1) {
+      return {
+        success: false,
+        error: response.data,
+      };
+    }
+
+    return {
+      success: true,
+      data: response.data.data || [],
+      dataCount: response.data.dataCount || 0,
+    };
+  } catch (error) {
+    console.error("918KAYA error getting bet list:", error.message);
+    return {
+      success: false,
+      error: error.message,
+    };
+  }
+};
+
+const findUsernameByKaya918Account = async (account) => {
+  const user = await User.findOne(
+    {
+      $or: [
+        { kaya918GameName: account },
+        { pastKaya918GameName: { $in: [account] } },
+      ],
+    },
+    { username: 1 }
+  ).lean();
+
+  return user?.username || null;
+};
+
+const syncKaya918GameHistory = async () => {
+  try {
+    console.log(
+      `[918KAYA Sync] Starting sync at ${moment().format(
+        "YYYY-MM-DD HH:mm:ss"
+      )}`
+    );
+
+    // Get last sync time
+    const lastSyncTime = await getKaya918LastSyncTime();
+
+    let startUpdateTime;
+    let endUpdateTime = moment.utc().subtract(10, "seconds").valueOf(); // 10 seconds ago (in ms)
+
+    if (lastSyncTime) {
+      // Continue from last sync time
+      startUpdateTime = moment(lastSyncTime).valueOf();
+    } else {
+      // First run: sync last 5 minutes (max allowed)
+      startUpdateTime = moment.utc().subtract(5, "minutes").valueOf();
+    }
+
+    // Ensure we don't exceed 5 minute max range
+    const maxRange = 5 * 60 * 1000; // 5 minutes in ms
+    if (endUpdateTime - startUpdateTime > maxRange) {
+      startUpdateTime = endUpdateTime - maxRange;
+    }
+
+    console.log(
+      `[918KAYA Sync] Fetching from ${moment(startUpdateTime).format(
+        "YYYY-MM-DD HH:mm:ss"
+      )} to ${moment(endUpdateTime).format("YYYY-MM-DD HH:mm:ss")}`
+    );
+
+    // Fetch bet list from API
+    const betListResult = await kaya918GetBetList(
+      startUpdateTime,
+      endUpdateTime
+    );
+
+    if (!betListResult.success) {
+      console.error(
+        "[918KAYA Sync] Failed to fetch bet list:",
+        betListResult.error
+      );
+      return {
+        success: false,
+        error: betListResult.error,
+      };
+    }
+
+    const bets = betListResult.data;
+    console.log(`[918KAYA Sync] Fetched ${bets.length} bets from API`);
+
+    if (bets.length === 0) {
+      // Update sync time even if no bets
+      await updateKaya918LastSyncTime(moment(endUpdateTime).toDate());
+      return {
+        success: true,
+        totalBets: 0,
+        inserted: 0,
+        skipped: 0,
+      };
+    }
+
+    // Get existing betIds to check for duplicates
+    const betIds = bets.map((bet) => bet.betId);
+    const existingBetIds = new Set(
+      (
+        await slotKaya918Modal
+          .find({ betId: { $in: betIds } })
+          .select("betId")
+          .lean()
+      ).map((r) => r.betId)
+    );
+
+    // Process bets
+    const newRecords = [];
+    for (const bet of bets) {
+      // Skip if already exists
+      if (existingBetIds.has(bet.betId)) {
+        continue;
+      }
+
+      // Find username by account
+      const username = await findUsernameByKaya918Account(bet.account);
+      if (!username) {
+        console.log(
+          `[918KAYA Sync] User not found for account: ${bet.account}`
+        );
+        continue;
+      }
+
+      // Convert betTime from Unix timestamp (ms) to Date
+      const betTime = bet.betTime
+        ? moment.tz(parseInt(bet.betTime), "Asia/Kuala_Lumpur").utc().toDate()
+        : moment.utc().toDate();
+
+      newRecords.push({
+        betId: bet.betId,
+        username: username,
+        betamount: (bet.betAmount || 0) / 10000,
+        settleamount: (bet.payOut || 0) / 10000,
+        bet: true,
+        settle: true,
+        betTime: betTime,
+      });
+    }
+
+    console.log(
+      `[918KAYA Sync] New records: ${newRecords.length}, Skipped: ${
+        bets.length - newRecords.length
+      }`
+    );
+
+    // Batch insert new records
+    if (newRecords.length > 0) {
+      await slotKaya918Modal.insertMany(newRecords, { ordered: false });
+      console.log(`[918KAYA Sync] Inserted ${newRecords.length} records`);
+    }
+
+    // Update last sync time
+    await updateKaya918LastSyncTime(moment(endUpdateTime).toDate());
+
+    return {
+      success: true,
+      totalBets: bets.length,
+      inserted: newRecords.length,
+      skipped: bets.length - newRecords.length,
+      syncTime: moment(endUpdateTime).format("YYYY-MM-DD HH:mm:ss"),
+    };
+  } catch (error) {
+    console.error("[918KAYA Sync] Fatal error:", error.message);
+    return {
+      success: false,
+      error: error.message,
+    };
+  }
+};
+
 module.exports = router;
 module.exports.kaya918CheckBalance = kaya918CheckBalance;
+module.exports.syncKaya918GameHistory = syncKaya918GameHistory;

@@ -18,6 +18,7 @@ const qs = require("querystring");
 const GameWalletLog = require("../../models/gamewalletlog.model");
 const slotMega888Modal = require("../../models/slot_mega888.model");
 const GameSyncLog = require("../../models/game_syncdata.model");
+const { syncKaya918GameHistory } = require("./slotkaya918");
 const cron = require("node-cron");
 
 require("dotenv").config();
@@ -1082,10 +1083,11 @@ const getLastSyncTime = async () => {
 };
 
 const updateLastSyncTime = async (time) => {
-  await GameSyncLog.create({
-    provider: "mega888",
-    syncTime: time.toDate(),
-  });
+  await GameSyncLog.findOneAndUpdate(
+    { provider: "mega888" },
+    { syncTime: time.toDate() },
+    { upsert: true, new: true }
+  );
 };
 
 // Fetch total report from Mega888 API
@@ -1555,7 +1557,7 @@ const syncMega888GameHistory = async () => {
   }
 };
 if (process.env.NODE_ENV !== "development") {
-  cron.schedule("*/10 * * * *", async () => {
+  cron.schedule("*/4 * * * *", async () => {
     // Mega888 sync
     // console.log("[Cron] Starting Mega888 sync job");
     try {
@@ -1563,6 +1565,14 @@ if (process.env.NODE_ENV !== "development") {
       // console.log("[Cron] Mega888 sync completed successfully");
     } catch (error) {
       console.error("[Cron] Mega888 sync failed:", error.message);
+    }
+
+    console.log("[Cron] Starting 918KAYA sync job");
+    try {
+      const result = await syncKaya918GameHistory();
+      console.log("[Cron] 918KAYA sync completed:", result);
+    } catch (error) {
+      console.error("[Cron] 918KAYA sync failed:", error.message);
     }
   });
 }

@@ -338,10 +338,12 @@ const userSchema = new mongoose.Schema(
       type: String,
     },
     pastMega888GameName: {
-      type: String,
+      type: [String],
+      default: [],
     },
     pastMega888GamePW: {
-      type: String,
+      type: [String],
+      default: [],
     },
     kaya918GameName: {
       type: String,
@@ -350,10 +352,12 @@ const userSchema = new mongoose.Schema(
       type: String,
     },
     pastKaya918GameName: {
-      type: String,
+      type: [String],
+      default: [],
     },
     pastKaya918GamePW: {
-      type: String,
+      type: [String],
+      default: [],
     },
   },
   {
