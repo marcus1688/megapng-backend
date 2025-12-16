@@ -74,6 +74,7 @@ const notificationRouter = require("./routes/notification");
 
 const slotMega888Router = require("./routes/GAMEAPI/slotmega888");
 const slotMega888LoginRouter = require("./routes/GAMEAPI/slot_mega888login");
+const slot918KayaRouter = require("./routes/GAMEAPI/slotkaya918");
 
 const ALLGameFunctionRouter = require("./routes/GAMEAPI/0_GameFunction");
 const ALLGameStatusRouter = require("./routes/GAMEAPI/0_GameStatus");
@@ -747,6 +748,7 @@ app.use(adminListRouter);
 app.use(notificationRouter);
 
 app.use(slotMega888Router);
+app.use(slot918KayaRouter);
 
 app.use(ALLGameFunctionRouter);
 app.use(ALLGameStatusRouter);

@@ -12,7 +12,7 @@ const {
 const { v4: uuidv4 } = require("uuid");
 const querystring = require("querystring");
 const moment = require("moment");
-const { JokerCheckBalance } = require("./slotjoker");
+const { mega888CheckBalance, kaya918CheckBalance } = require("./slotmega888");
 const GameWalletLog = require("../../models/gamewalletlog.model");
 
 require("dotenv").config();
@@ -45,31 +45,19 @@ function roundToTwoDecimals(num) {
 
 const GAME_BALANCE_CHECKERS = [
   {
-    name: "joker-2x",
-    key: "jokerBalance",
-    checker: (user) => JokerCheckBalance(user, "2x"),
-    extractBalance: (result) => Number(result.data.Credit),
-    condition: (user) => !!user.jokerGameName,
+    name: "mega888",
+    key: "mega888Balance",
+    checker: (user) => mega888CheckBalance(user),
+    extractBalance: (result) => Number(result.data.result),
+    condition: (user) => !!user.mega888GameName,
   },
   {
-    name: "joker-5x",
-    key: "jokerBalanceTwo", // Different key for 5x
-    checker: (user) => JokerCheckBalance(user, "5x"),
-    extractBalance: (result) => Number(result.data.Credit),
-    condition: (user) => !!user.jokerGameTwoName,
+    name: "kaya918",
+    key: "kaya918Balance",
+    checker: (user) => kaya918CheckBalance(user),
+    extractBalance: (result) => Number(result.data.balance / 10000),
+    condition: (user) => !!user.kaya918GameName,
   },
-  // {
-  //   name: "pg",
-  //   key: "pgBalance",
-  //   checker: PGCheckBalance,
-  //   extractBalance: (result) => Number(result.data.balance),
-  // },
-  // {
-  //   name: "pragmatic",
-  //   key: "pragmaticBalance",
-  //   checker: PragmaticCheckBalance,
-  //   extractBalance: (result) => Number(result.balance),
-  // },
 ];
 
 router.post(

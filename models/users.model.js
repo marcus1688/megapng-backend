@@ -316,9 +316,11 @@ const userSchema = new mongoose.Schema(
     },
     gameStatus: {
       mega888: { type: gameStatusSchema, default: () => ({}) },
+      kaya918: { type: gameStatusSchema, default: () => ({}) },
     },
     gameSuspendStatus: {
       mega888: { type: gameLockSchema, default: () => ({}) },
+      kaya918: { type: gameLockSchema, default: () => ({}) },
     },
     lastForcedLogout: { type: Date, default: null },
     luckySpinCount: {
@@ -339,6 +341,18 @@ const userSchema = new mongoose.Schema(
       type: String,
     },
     pastMega888GamePW: {
+      type: String,
+    },
+    kaya918GameName: {
+      type: String,
+    },
+    kaya918GamePW: {
+      type: String,
+    },
+    pastKaya918GameName: {
+      type: String,
+    },
+    pastKaya918GamePW: {
       type: String,
     },
   },
