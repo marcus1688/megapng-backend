@@ -8,7 +8,7 @@ const { User } = require("../models/users.model");
 const Deposit = require("../models/deposit.model");
 const { adminUser } = require("../models/adminuser.model");
 
-const TIMEZONE = "Asia/Kuala_Lumpur";
+const TIMEZONE = "Pacific/Port_Moresby";
 const BONUS_POINTS = 58;
 
 // 每个拜1 12:10am Attendace Bonus

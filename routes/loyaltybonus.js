@@ -7,13 +7,13 @@ const { adminUser } = require("../models/adminuser.model");
 const Deposit = require("../models/deposit.model");
 const { authenticateAdminToken } = require("../auth/adminAuth");
 const { User } = require("../models/users.model");
-const TIMEZONE = "Asia/Kuala_Lumpur";
+const TIMEZONE = "Pacific/Port_Moresby";
 
 const LOYALTY_TIERS = [
-  { min: 50000, max: Infinity, tier: "tier4", bonus: 588 },
-  { min: 25000, max: 49999, tier: "tier3", bonus: 388 },
-  { min: 5000, max: 24999, tier: "tier2", bonus: 88 },
-  { min: 1000, max: 4999, tier: "tier1", bonus: 28 },
+  { min: 30000, max: Infinity, tier: "tier4", bonus: 388 },
+  { min: 15000, max: 29999, tier: "tier3", bonus: 288 },
+  { min: 5000, max: 14999, tier: "tier2", bonus: 138 },
+  { min: 1000, max: 4999, tier: "tier1", bonus: 38 },
   { min: 0, max: 999, tier: "none", bonus: 0 },
 ];
 
