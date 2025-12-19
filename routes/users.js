@@ -6449,6 +6449,74 @@ router.post(
   }
 );
 
+// Update 用户银行
+router.post(
+  "/admin/api/import-users-bank",
+  authenticateAdminToken,
+  async (req, res) => {
+    const { users } = req.body;
+    if (!users || !Array.isArray(users) || !users.length) {
+      return res.status(200).json({
+        success: false,
+        message: {
+          en: "No users to import",
+          zh: "没有用户数据",
+        },
+      });
+    }
+    const results = {
+      success: [],
+      failed: [],
+      skipped: [],
+    };
+    for (const user of users) {
+      const { id, fullname, bankAccounts } = user;
+      if (!id) {
+        results.failed.push({
+          id,
+          fullname,
+          reason: "Missing userid",
+        });
+        continue;
+      }
+      if (!bankAccounts || !bankAccounts.length) {
+        results.skipped.push({
+          id,
+          fullname,
+          reason: "No bank accounts to update",
+        });
+        continue;
+      }
+      try {
+        const existingUser = await User.findOne({ userid: parseInt(id) });
+        if (!existingUser) {
+          results.skipped.push({
+            id,
+            fullname,
+            reason: "User not found",
+          });
+          continue;
+        }
+        await User.findByIdAndUpdate(existingUser._id, {
+          $set: { bankAccounts: bankAccounts },
+        });
+        results.success.push({ id, fullname });
+      } catch (error) {
+        console.error(`Import bank error for ${fullname}:`, error.message);
+        results.failed.push({ id, fullname, reason: error.message });
+      }
+    }
+    res.status(200).json({
+      success: true,
+      message: {
+        en: `Bank import complete. Success: ${results.success.length}, Skipped: ${results.skipped.length}, Failed: ${results.failed.length}`,
+        zh: `银行导入完成。成功: ${results.success.length}, 跳过: ${results.skipped.length}, 失败: ${results.failed.length}`,
+      },
+      data: results,
+    });
+  }
+);
+
 // Reset all users totaldeposit to 0
 router.post(
   "/admin/api/reset-all-totaldeposit",
