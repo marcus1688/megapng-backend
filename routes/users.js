@@ -4754,6 +4754,376 @@ router.get(
   }
 );
 
+// Admin Get Player Report (Timezone)
+router.get(
+  "/admin/api/player-report-timezone",
+  authenticateAdminToken,
+  async (req, res) => {
+    try {
+      const { startDate, endDate } = req.query;
+
+      if (!startDate || !endDate) {
+        return res.status(400).json({
+          success: false,
+          message: "Start date and end date are required",
+        });
+      }
+
+      const pngTimezone = "Pacific/Port_Moresby";
+      const today = moment().tz(pngTimezone).format("YYYY-MM-DD");
+      const startMoment = moment(new Date(startDate));
+      const endMoment = moment(new Date(endDate));
+      const startDateFormatted = startMoment.format("YYYY-MM-DD");
+      const endDateFormatted = endMoment.format("YYYY-MM-DD");
+      const needsTodayData = endDateFormatted >= today;
+      const needsHistoricalData = startDateFormatted < today;
+
+      const dateFilter = {};
+      if (startDate && endDate) {
+        dateFilter.createdAt = {
+          $gte: moment
+            .tz(startDateFormatted, "YYYY-MM-DD", pngTimezone)
+            .startOf("day")
+            .utc()
+            .toDate(),
+          $lte: moment
+            .tz(endDateFormatted, "YYYY-MM-DD", pngTimezone)
+            .endOf("day")
+            .utc()
+            .toDate(),
+        };
+      }
+
+      // Run financial queries
+      const financialResults = await Promise.all([
+        Deposit.aggregate([
+          {
+            $match: {
+              status: "approved",
+              reverted: false,
+              ...dateFilter,
+            },
+          },
+          {
+            $group: {
+              _id: "$username",
+              depositQty: { $sum: 1 },
+              totalDeposit: { $sum: "$amount" },
+            },
+          },
+        ]),
+
+        Deposit.aggregate([
+          {
+            $match: {
+              status: "approved",
+              reverted: false,
+              ...dateFilter,
+            },
+          },
+          {
+            $group: {
+              _id: {
+                username: "$username",
+                date: {
+                  $dateToString: {
+                    format: "%Y-%m-%d",
+                    date: {
+                      $dateAdd: {
+                        startDate: "$createdAt",
+                        unit: "hour",
+                        amount: 8,
+                      },
+                    },
+                    timezone: "UTC",
+                  },
+                },
+              },
+            },
+          },
+          {
+            $group: {
+              _id: "$_id.username",
+              uniqueDepositDays: { $sum: 1 },
+            },
+          },
+        ]),
+
+        Withdraw.aggregate([
+          {
+            $match: {
+              status: "approved",
+              reverted: false,
+              ...dateFilter,
+            },
+          },
+          {
+            $group: {
+              _id: "$username",
+              withdrawQty: { $sum: 1 },
+              totalWithdraw: { $sum: "$amount" },
+            },
+          },
+        ]),
+
+        Bonus.aggregate([
+          {
+            $match: {
+              status: "approved",
+              reverted: false,
+              ...dateFilter,
+            },
+          },
+          {
+            $group: {
+              _id: "$username",
+              totalBonus: { $sum: "$amount" },
+            },
+          },
+        ]),
+
+        RebateLog.aggregate([
+          {
+            $match: dateFilter,
+          },
+          {
+            $group: {
+              _id: "$username",
+              totalRebate: { $sum: "$totalRebate" },
+            },
+          },
+        ]),
+
+        UserWalletCashOut.aggregate([
+          {
+            $match: {
+              reverted: false,
+              ...dateFilter,
+            },
+          },
+          {
+            $group: {
+              _id: "$username",
+              totalCashout: { $sum: "$amount" },
+            },
+          },
+        ]),
+        UserWalletCashIn.aggregate([
+          {
+            $match: {
+              reverted: false,
+              ...dateFilter,
+            },
+          },
+          {
+            $group: {
+              _id: "$username",
+              totalCashin: { $sum: "$amount" },
+            },
+          },
+        ]),
+      ]);
+
+      // Extract financial data
+      const [
+        depositStats,
+        uniqueDepositStats,
+        withdrawStats,
+        bonusStats,
+        rebateStats,
+        cashoutStats,
+        cashinStats,
+      ] = financialResults;
+
+      // Generic aggregation function for game turnover
+      const getAllUsersTurnover = async (
+        model,
+        matchConditions,
+        turnoverExpression = { $ifNull: ["$betamount", 0] }
+      ) => {
+        try {
+          // Add date filter to match conditions
+          const fullMatchConditions = {
+            ...matchConditions,
+            createdAt: dateFilter.createdAt,
+          };
+
+          const results = await model.aggregate([
+            {
+              $match: fullMatchConditions,
+            },
+            {
+              $group: {
+                _id: { $toLower: "$username" },
+                turnover: { $sum: turnoverExpression },
+              },
+            },
+          ]);
+
+          return results.map((item) => ({
+            username: item._id,
+            turnover: Number(item.turnover.toFixed(2)),
+          }));
+        } catch (error) {
+          console.error(
+            `Error aggregating turnover for model ${model.modelName}:`,
+            error
+          );
+          return [];
+        }
+      };
+
+      // Process turnover data
+      const userTurnoverMap = {};
+
+      // Get historical data if needed
+      if (needsHistoricalData) {
+        const historicalData = await GameDataLog.find({
+          date: {
+            $gte: startDateFormatted,
+            $lte:
+              endDateFormatted < today
+                ? endDateFormatted
+                : moment.utc().subtract(1, "days").format("YYYY-MM-DD"),
+          },
+        });
+
+        historicalData.forEach((record) => {
+          const username = record.username.toLowerCase();
+
+          if (!userTurnoverMap[username]) {
+            userTurnoverMap[username] = 0;
+          }
+
+          // Convert gameCategories Map to Object if needed
+          const gameCategories =
+            record.gameCategories instanceof Map
+              ? Object.fromEntries(record.gameCategories)
+              : record.gameCategories;
+
+          // Sum up turnover from all categories and games
+          if (gameCategories) {
+            Object.keys(gameCategories).forEach((categoryName) => {
+              const category =
+                gameCategories[categoryName] instanceof Map
+                  ? Object.fromEntries(gameCategories[categoryName])
+                  : gameCategories[categoryName];
+
+              // Process each game in this category
+              Object.keys(category).forEach((gameName) => {
+                const game = category[gameName];
+                const turnover = Number(game.turnover || 0);
+
+                // Add to user total
+                userTurnoverMap[username] += turnover;
+              });
+            });
+          }
+        });
+      }
+
+      // Get today's data if needed
+      if (needsTodayData) {
+        const todayGamePromises = [
+          // Pragmatic Play (PP)
+          // getAllUsersTurnover(SlotLivePPModal, {
+          //   refunded: false,
+          //   ended: true,
+          // }),
+        ];
+
+        const todayGameResults = await Promise.allSettled(todayGamePromises);
+
+        todayGameResults.forEach((gameResultPromise) => {
+          if (gameResultPromise.status === "fulfilled") {
+            const gameResults = gameResultPromise.value;
+
+            gameResults.forEach((userResult) => {
+              const username = userResult.username;
+              if (!username) return;
+
+              if (!userTurnoverMap[username]) {
+                userTurnoverMap[username] = 0;
+              }
+
+              userTurnoverMap[username] += userResult.turnover || 0;
+            });
+          }
+        });
+      }
+
+      // Get all unique usernames
+      const usernames = new Set([
+        ...depositStats.map((stat) => stat._id),
+        ...uniqueDepositStats.map((stat) => stat._id),
+        ...withdrawStats.map((stat) => stat._id),
+        ...bonusStats.map((stat) => stat._id),
+        ...rebateStats.map((stat) => stat._id),
+        ...cashoutStats.map((stat) => stat._id),
+        ...cashinStats.map((stat) => stat._id),
+        ...Object.keys(userTurnoverMap),
+      ]);
+
+      const users = await User.find({
+        username: { $in: Array.from(usernames) },
+      }).select("username userid");
+      const userIdMap = {};
+      users.forEach((u) => {
+        userIdMap[u.username] = u.userid;
+      });
+
+      // Create report data
+      const reportData = Array.from(usernames).map((username) => {
+        const deposit =
+          depositStats.find((stat) => stat._id === username) || {};
+        const uniqueDeposit =
+          uniqueDepositStats.find((stat) => stat._id === username) || {};
+        const withdraw =
+          withdrawStats.find((stat) => stat._id === username) || {};
+        const bonus = bonusStats.find((stat) => stat._id === username) || {};
+        const rebate = rebateStats.find((stat) => stat._id === username) || {};
+        const cashout =
+          cashoutStats.find((stat) => stat._id === username) || {};
+        const cashin = cashinStats.find((stat) => stat._id === username) || {};
+        const totalTurnover = userTurnoverMap[username] || 0;
+
+        return {
+          userid: userIdMap[username] || null,
+          username,
+          depositQty: deposit.depositQty || 0,
+          totalDeposit: deposit.totalDeposit || 0,
+          uniqueDepositDays: uniqueDeposit.uniqueDepositDays || 0,
+          withdrawQty: withdraw.withdrawQty || 0,
+          totalWithdraw: withdraw.totalWithdraw || 0,
+          totalBonus: bonus.totalBonus || 0,
+          totalRebate: rebate.totalRebate || 0,
+          totalCashout: cashout.totalCashout || 0,
+          totalCashin: cashin.totalCashin || 0,
+          totalTurnover: Number(totalTurnover.toFixed(2)),
+          winLose: (deposit.totalDeposit || 0) - (withdraw.totalWithdraw || 0),
+        };
+      });
+
+      res.status(200).json({
+        success: true,
+        message: "Report data retrieved successfully",
+        data: reportData,
+        dateRange: {
+          start: startDateFormatted,
+          end: endDateFormatted,
+        },
+      });
+    } catch (error) {
+      console.error("Error generating user summary report:", error);
+      res.status(500).json({
+        success: false,
+        message: "Internal server error",
+        error: error.toString(),
+      });
+    }
+  }
+);
+
 router.get(
   "/admin/api/user/:userId/gamewalletlog",
   authenticateAdminToken,

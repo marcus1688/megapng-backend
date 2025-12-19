@@ -152,6 +152,7 @@ const modulePermissions = {
     permissions: [
       { value: "summaryreport", label: "Summary Report" },
       { value: "playerreport", label: "Player Report" },
+      { value: "playerreporttimezone", label: "Player Timezone" },
     ],
   },
   tools: {
