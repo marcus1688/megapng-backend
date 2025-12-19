@@ -5498,6 +5498,7 @@ router.post(
         kioskName,
         bankId,
         fromWallet,
+        transactionId: customTransactionId,
         remark,
       } = req.body;
 
@@ -5592,8 +5593,21 @@ router.post(
         }
       }
 
-      const transactionId = uuidv4();
-
+      const transactionId = customTransactionId || uuidv4();
+      if (customTransactionId) {
+        const existingDeposit = await Deposit.findOne({
+          transactionId: customTransactionId,
+        });
+        if (existingDeposit) {
+          return res.status(200).json({
+            success: false,
+            message: {
+              en: "Transaction ID already exists",
+              zh: "交易编号已存在",
+            },
+          });
+        }
+      }
       let finalRemark = remark || "-";
       if (fromWallet) {
         finalRemark = `${remark || "-"} | From Wallet`;
