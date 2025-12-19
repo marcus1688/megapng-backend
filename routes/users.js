@@ -5785,6 +5785,7 @@ router.post(
         kioskName,
         bankId,
         toWallet,
+        transactionId: customTransactionId,
         remark,
       } = req.body;
 
@@ -5893,8 +5894,21 @@ router.post(
         }
       }
 
-      const transactionId = uuidv4();
-
+      const transactionId = customTransactionId || uuidv4();
+      if (customTransactionId) {
+        const existingWithdraw = await Withdraw.findOne({
+          transactionId: customTransactionId,
+        });
+        if (existingWithdraw) {
+          return res.status(200).json({
+            success: false,
+            message: {
+              en: "Transaction ID already exists",
+              zh: "交易编号已存在",
+            },
+          });
+        }
+      }
       if (toWallet) {
         const newWithdraw = new Withdraw({
           transactionId,
