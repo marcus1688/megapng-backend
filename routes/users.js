@@ -2842,6 +2842,7 @@ router.get("/admin/api/allusers", authenticateAdminToken, async (req, res) => {
           winlose: 1,
           wallet: "$walletAmount",
           wallettwo: "$walletTwoAmount",
+          bankAccounts: 1,
         },
       },
     ];
@@ -3532,7 +3533,7 @@ router.post(
   async (req, res) => {
     try {
       const userId = req.params.userId;
-      const { name, bankname, banknumber } = req.body;
+      const { name, bankname, bankcode, banknumber } = req.body;
       if (!name || !bankname || !banknumber) {
         return res.status(200).json({
           success: false,
@@ -3554,6 +3555,7 @@ router.post(
       }
       user.bankAccounts.push({
         name,
+        bankcode,
         bankname,
         banknumber,
       });
@@ -5187,6 +5189,16 @@ router.post(
         });
       }
 
+      if (!user.status) {
+        return res.status(200).json({
+          success: false,
+          message: {
+            en: "User account is suspended",
+            zh: "用户账户已被封锁",
+          },
+        });
+      }
+
       if (fromWallet) {
         if (Number(user.wallet) < kioskDepositAmount) {
           return res.status(200).json({
@@ -5426,6 +5438,16 @@ router.post(
           message: {
             en: "User not found",
             zh: "找不到用户",
+          },
+        });
+      }
+
+      if (!user.status) {
+        return res.status(200).json({
+          success: false,
+          message: {
+            en: "User account is suspended",
+            zh: "用户账户已被封锁",
           },
         });
       }
@@ -5709,6 +5731,16 @@ router.post(
           message: {
             en: "User not found",
             zh: "找不到用户",
+          },
+        });
+      }
+
+      if (!user.status) {
+        return res.status(200).json({
+          success: false,
+          message: {
+            en: "User account is suspended",
+            zh: "用户账户已被封锁",
           },
         });
       }

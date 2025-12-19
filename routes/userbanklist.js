@@ -44,6 +44,7 @@ router.post(
   async (req, res) => {
     try {
       const { bankname, bankcode, remark } = req.body;
+      let logo = null;
       if (req.file) {
         const folderPath = "userbanklists/";
         const fileKey = `${folderPath}${Date.now()}_${req.file.originalname}`;
