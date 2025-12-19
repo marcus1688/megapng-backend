@@ -4794,6 +4794,29 @@ router.get(
         };
       }
 
+      console.log("=== TIME RANGE DEBUG ===");
+      console.log("PNG Timezone:", pngTimezone);
+      console.log("Today (PNG):", today);
+      console.log("Start Date Formatted:", startDateFormatted);
+      console.log("End Date Formatted:", endDateFormatted);
+      console.log("---");
+      console.log("Query $gte (UTC):", dateFilter.createdAt.$gte.toISOString());
+      console.log("Query $lte (UTC):", dateFilter.createdAt.$lte.toISOString());
+      console.log("---");
+      console.log(
+        "Query $gte (PNG):",
+        moment(dateFilter.createdAt.$gte)
+          .tz(pngTimezone)
+          .format("YYYY-MM-DD HH:mm:ss")
+      );
+      console.log(
+        "Query $lte (PNG):",
+        moment(dateFilter.createdAt.$lte)
+          .tz(pngTimezone)
+          .format("YYYY-MM-DD HH:mm:ss")
+      );
+      console.log("========================");
+
       // Run financial queries
       const financialResults = await Promise.all([
         Deposit.aggregate([
