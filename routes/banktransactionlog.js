@@ -78,7 +78,7 @@ router.get(
             .lean(),
           Bonus.find(queryCondition)
             .select(
-              "username fullname promotionnameEN method transactionType amount status remark createdAt processBy processtime _id reverted imageUrl imageUrls duplicateIP duplicateBank game userid _id userId"
+              "username fullname promotionnameEN method transactionType amount status remark createdAt processBy processtime _id reverted imageUrl imageUrls duplicateIP duplicateBank game userid _id userId transactionId"
             )
             .lean(),
           UserWalletCashOut.find(queryCondition)
@@ -112,6 +112,7 @@ router.get(
           reverted: transaction.reverted,
           duplicateIP: transaction.duplicateIP,
           duplicateBank: transaction.duplicateBank,
+          transactionId: transaction.transactionId,
         };
         if (type === "bonus") {
           return {
