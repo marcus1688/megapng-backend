@@ -7570,5 +7570,94 @@ router.post(
     }
   }
 );
+
+// Fix Megapng Timezone
+router.post(
+  "/admin/api/fix-timezone",
+  authenticateAdminToken,
+  async (req, res) => {
+    try {
+      const depositResult = await Deposit.collection.updateMany(
+        {
+          $expr: {
+            $and: [
+              { $gte: [{ $hour: "$createdAt" }, 14] },
+              { $lte: [{ $hour: "$createdAt" }, 15] },
+            ],
+          },
+        },
+        [
+          {
+            $set: {
+              createdAt: { $subtract: ["$createdAt", 24 * 60 * 60 * 1000] },
+              updatedAt: { $subtract: ["$updatedAt", 24 * 60 * 60 * 1000] },
+            },
+          },
+        ]
+      );
+
+      const withdrawResult = await Withdraw.collection.updateMany(
+        {
+          $expr: {
+            $and: [
+              { $gte: [{ $hour: "$createdAt" }, 14] },
+              { $lte: [{ $hour: "$createdAt" }, 15] },
+            ],
+          },
+        },
+        [
+          {
+            $set: {
+              createdAt: { $subtract: ["$createdAt", 24 * 60 * 60 * 1000] },
+              updatedAt: { $subtract: ["$updatedAt", 24 * 60 * 60 * 1000] },
+            },
+          },
+        ]
+      );
+
+      const walletLogResult = await UserWalletLog.collection.updateMany(
+        {
+          $expr: {
+            $and: [
+              { $gte: [{ $hour: "$createdAt" }, 14] },
+              { $lte: [{ $hour: "$createdAt" }, 15] },
+            ],
+          },
+        },
+        [
+          {
+            $set: {
+              transactiontime: {
+                $subtract: ["$transactiontime", 24 * 60 * 60 * 1000],
+              },
+              createdAt: { $subtract: ["$createdAt", 24 * 60 * 60 * 1000] },
+              updatedAt: { $subtract: ["$updatedAt", 24 * 60 * 60 * 1000] },
+            },
+          },
+        ]
+      );
+
+      res.status(200).json({
+        success: true,
+        message: {
+          en: `Fixed ${depositResult.modifiedCount} deposits, ${withdrawResult.modifiedCount} withdraws, ${walletLogResult.modifiedCount} wallet logs`,
+          zh: `已修复 ${depositResult.modifiedCount} 条存款、${withdrawResult.modifiedCount} 条提款、${walletLogResult.modifiedCount} 条钱包日志`,
+        },
+        data: {
+          deposits: depositResult.modifiedCount,
+          withdraws: withdrawResult.modifiedCount,
+          walletLogs: walletLogResult.modifiedCount,
+        },
+      });
+    } catch (error) {
+      console.error("Error fixing timezone:", error);
+      res.status(500).json({
+        success: false,
+        message: { en: "Error", zh: "错误" },
+        error: error.message,
+      });
+    }
+  }
+);
 module.exports = router;
 module.exports.checkAndUpdateVIPLevel = checkAndUpdateVIPLevel;
