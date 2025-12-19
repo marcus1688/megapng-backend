@@ -5834,7 +5834,7 @@ router.post(
         });
       }
 
-      const withdrawCountLimit = 3;
+      const withdrawCountLimit = 10;
       const pngTimezone = "Pacific/Port_Moresby";
       const todayStart = moment().tz(pngTimezone).startOf("day").utc();
       const todayEnd = moment().tz(pngTimezone).endOf("day").utc();
