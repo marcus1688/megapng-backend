@@ -4771,13 +4771,10 @@ router.get(
 
       const pngTimezone = "Pacific/Port_Moresby";
       const today = moment().tz(pngTimezone).format("YYYY-MM-DD");
-      const startMoment = moment(new Date(startDate));
-      const endMoment = moment(new Date(endDate));
-      const startDateFormatted = startMoment.format("YYYY-MM-DD");
-      const endDateFormatted = endMoment.format("YYYY-MM-DD");
+      const startDateFormatted = startDate;
+      const endDateFormatted = endDate;
       const needsTodayData = endDateFormatted >= today;
       const needsHistoricalData = startDateFormatted < today;
-
       const dateFilter = {};
       if (startDate && endDate) {
         dateFilter.createdAt = {
