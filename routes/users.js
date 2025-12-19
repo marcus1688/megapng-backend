@@ -5452,6 +5452,28 @@ router.post(
         });
       }
 
+      const withdrawCountLimit = 3;
+      const pngTimezone = "Pacific/Port_Moresby";
+      const todayStart = moment().tz(pngTimezone).startOf("day").utc();
+      const todayEnd = moment().tz(pngTimezone).endOf("day").utc();
+      const todayWithdrawalCount = await Withdraw.countDocuments({
+        userId: user._id,
+        status: "approved",
+        createdAt: {
+          $gte: todayStart.toDate(),
+          $lte: todayEnd.toDate(),
+        },
+      });
+      if (todayWithdrawalCount >= withdrawCountLimit) {
+        return res.status(200).json({
+          success: false,
+          message: {
+            en: `Daily withdrawal limit reached (maximum ${withdrawCountLimit} times per day). You've already made ${todayWithdrawalCount} withdrawal(s) today.`,
+            zh: `已达到每日提款限制（每天最多${withdrawCountLimit}次）。您今日已提款${todayWithdrawalCount}次。`,
+          },
+        });
+      }
+
       let bank = null;
       if (!toWallet) {
         bank = await BankList.findById(bankId);
