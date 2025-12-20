@@ -63,6 +63,58 @@ async function GameWalletLogAttempt(
   });
 }
 
+const kaya918KickPlayer = async (user) => {
+  try {
+    const timestamp = Math.floor(Date.now() / 1000);
+
+    const registerID = user.gameId.toLowerCase();
+
+    const requestBody = {
+      agentID: kaya918AgentID,
+      accountName: registerID,
+      timeStamp: timestamp,
+    };
+
+    const bodyJson = JSON.stringify(requestBody);
+    const cipher = crypto.createCipheriv("aes-128-ecb", kaya918AESKey, null);
+    cipher.setAutoPadding(true);
+    let encrypted = cipher.update(bodyJson, "utf8", "base64");
+    encrypted += cipher.final("base64");
+
+    const aesEncode = crypto
+      .createHash("md5")
+      .update(encrypted + kaya918MD5Key)
+      .digest("hex")
+      .toLowerCase();
+
+    const response = await axios.post(
+      `${kaya918APIURL}v1/kickoffline`,
+      requestBody,
+      {
+        headers: {
+          "Content-Type": "application/json",
+          "AES-ENCODE": aesEncode,
+          "Accept-Encoding": "gzip",
+        },
+      }
+    );
+
+    if (response.data.errorCode !== 0) {
+      return {
+        success: false,
+        error: response.data,
+      };
+    }
+
+    return { success: true, data: response.data };
+  } catch (error) {
+    console.error("918KAYA error checking user balance", error.message);
+    return {
+      success: false,
+      error: error.message,
+    };
+  }
+};
 const kaya918CheckBalance = async (user) => {
   try {
     const timestamp = Math.floor(Date.now() / 1000);
@@ -174,6 +226,16 @@ async function kaya918Deposit(user, trfamount) {
 
 async function kaya918Withdraw(user, trfamount) {
   try {
+    const kickResult = await kaya918KickPlayer(user);
+    if (!kickResult.success) {
+      console.log(
+        "918KAYA: Kick player failed, continuing with withdraw:",
+        kickResult.error
+      );
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 500));
+
     const timestamp = Math.floor(Date.now() / 1000);
 
     const registerID = user.gameId.toLowerCase();
