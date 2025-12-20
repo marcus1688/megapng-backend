@@ -2510,6 +2510,41 @@ router.post(
           playerfullname: user.fullname,
         });
         await transactionLog.save();
+
+        const feesLog = await BankTransactionLog.findOne({
+          remark: {
+            $regex: `Transaction fees for withdraw ${withdraw.transactionId}`,
+          },
+          transactiontype: "transaction fees",
+        });
+
+        if (feesLog) {
+          const feesAmount = Number(feesLog.amount) || 0;
+          await BankList.findByIdAndUpdate(bank._id, {
+            $inc: {
+              currentbalance: feesAmount,
+              totalTransactionFees: -feesAmount,
+            },
+          });
+          const updatedBankAfterFeesRevert = await BankList.findById(bank._id);
+          const revertFeesLog = new BankTransactionLog({
+            transactionId: uuidv4(),
+            bankName: bank.bankname,
+            ownername: bank.ownername,
+            bankAccount: bank.bankaccount,
+            remark: `Reverted transaction fees for withdraw ${withdraw.transactionId}`,
+            lastBalance: updatedBankAfterFeesRevert.currentbalance - feesAmount,
+            currentBalance: updatedBankAfterFeesRevert.currentbalance,
+            processby: adminuser.username,
+            qrimage: bank.qrimage,
+            userid: user.userid,
+            playerusername: user.username,
+            playerfullname: user.fullname,
+            transactiontype: "reverted transaction fees",
+            amount: feesAmount,
+          });
+          await revertFeesLog.save();
+        }
       }
 
       withdraw.reverted = true;
@@ -5883,13 +5918,20 @@ router.post(
         }
       }
 
+      const deductTransactionFees = req.body.deductTransactionFees;
+      const transactionFeesAmount =
+        !toWallet && deductTransactionFees && bank
+          ? Number(bank.transactionfees) || 0
+          : 0;
+
       if (!toWallet && bank) {
-        if (bank.currentbalance < totalBankAmount) {
+        const totalRequired = totalBankAmount + transactionFeesAmount;
+        if (bank.currentbalance < totalRequired) {
           return res.status(200).json({
             success: false,
             message: {
-              en: `Insufficient bank balance. Current: ${bank.currentbalance}, Required: ${totalBankAmount}`,
-              zh: `银行余额不足。当前: ${bank.currentbalance}，需要: ${totalBankAmount}`,
+              en: `Insufficient bank balance. Current: ${bank.currentbalance}, Required: ${totalRequired} (includes transaction fees: ${transactionFeesAmount})`,
+              zh: `银行余额不足。当前: ${bank.currentbalance}，需要: ${totalRequired}（含手续费: ${transactionFeesAmount}）`,
             },
           });
         }
@@ -5986,8 +6028,16 @@ router.post(
           method: "admin",
           status: "approved",
           remark:
-            walletWithdrawAmount > 0
-              ? `${remark || "-"} | Include wallet: ${walletWithdrawAmount}`
+            walletWithdrawAmount > 0 || transactionFeesAmount > 0
+              ? `${remark || "-"}${
+                  walletWithdrawAmount > 0
+                    ? ` | Include wallet: ${walletWithdrawAmount}`
+                    : ""
+                }${
+                  transactionFeesAmount > 0
+                    ? ` | Fees: ${transactionFeesAmount}`
+                    : ""
+                }`
               : remark,
           game: kioskName,
           processtime: "0s",
@@ -6061,6 +6111,63 @@ router.post(
         });
         await bankLog.save();
 
+        if (transactionFeesAmount > 0) {
+          const updatedBankAfterFees = await BankList.findByIdAndUpdate(
+            bankId,
+            [
+              {
+                $set: {
+                  totalTransactionFees: {
+                    $add: ["$totalTransactionFees", transactionFeesAmount],
+                  },
+                  currentbalance: {
+                    $subtract: [
+                      {
+                        $add: [
+                          "$startingbalance",
+                          "$totalDeposits",
+                          "$totalCashIn",
+                        ],
+                      },
+                      {
+                        $add: [
+                          "$totalWithdrawals",
+                          "$totalCashOut",
+                          {
+                            $add: [
+                              "$totalTransactionFees",
+                              transactionFeesAmount,
+                            ],
+                          },
+                        ],
+                      },
+                    ],
+                  },
+                },
+              },
+            ],
+            { new: true }
+          );
+
+          const feesLog = new BankTransactionLog({
+            transactionId: uuidv4(),
+            bankName: bank.bankname,
+            ownername: bank.ownername,
+            bankAccount: bank.bankaccount,
+            remark: `Transaction fees for withdraw ${transactionId}`,
+            lastBalance:
+              updatedBankAfterFees.currentbalance + transactionFeesAmount,
+            currentBalance: updatedBankAfterFees.currentbalance,
+            processby: adminuser.username,
+            qrimage: bank.qrimage,
+            userid: user.userid,
+            playerusername: user.username,
+            playerfullname: user.fullname,
+            transactiontype: "transaction fees",
+            amount: transactionFeesAmount,
+          });
+          await feesLog.save();
+        }
         const walletLog = new UserWalletLog({
           userId: user._id,
           transactionid: transactionId,
