@@ -164,7 +164,7 @@ router.post(
 
 router.post(
   "/admin/api/getdetailgamehistory/:userId",
-  // authenticateAdminToken,
+  authenticateAdminToken,
   async (req, res) => {
     try {
       const { userId } = req.params;
@@ -173,7 +173,7 @@ router.post(
         endDate,
         page = 1,
         limit = 50,
-        provider,
+        providers,
         category,
       } = req.body;
 
@@ -231,10 +231,10 @@ router.post(
       // Filter providers
       let filteredProviders = allProviders;
 
-      if (provider) {
-        const providerLower = provider.toLowerCase();
-        filteredProviders = filteredProviders.filter(
-          (p) => p.name === providerLower
+      if (providers && Array.isArray(providers) && providers.length > 0) {
+        const providersLower = providers.map((p) => p.toLowerCase());
+        filteredProviders = filteredProviders.filter((p) =>
+          providersLower.includes(p.name.toLowerCase())
         );
       }
 
@@ -246,9 +246,11 @@ router.post(
       }
 
       if (filteredProviders.length === 0) {
+        const providerNames = allProviders.map((p) => p.displayName);
         return res.status(200).json({
           success: true,
           data: {
+            providers: providerNames,
             pagination: {
               currentPage: 1,
               totalPages: 0,
