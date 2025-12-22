@@ -1481,6 +1481,7 @@ const syncKaya918GameHistory = async () => {
         : moment.utc().toDate();
 
       newRecords.push({
+        gameName: bet.gid || "918KAYA",
         betId: bet.betId,
         username: username,
         betamount: (bet.betAmount || 0) / 10000,
@@ -1521,6 +1522,67 @@ const syncKaya918GameHistory = async () => {
     };
   }
 };
+// const kaya918GetBetDetail = async () => {
+//   try {
+//     const timestamp = Math.floor(Date.now() / 1000);
+
+//     const requestBody = {
+//       agentID: kaya918AgentID,
+//       betId: "2499531817019",
+//       timeStamp: timestamp,
+//     };
+
+//     const bodyJson = JSON.stringify(requestBody);
+
+//     // Ensure AES key is a Buffer of 16 bytes
+//     const aesKeyBuffer = Buffer.from(kaya918AESKey, "utf8");
+
+//     const cipher = crypto.createCipheriv("aes-128-ecb", aesKeyBuffer, null);
+//     cipher.setAutoPadding(true);
+//     let encrypted = cipher.update(bodyJson, "utf8", "base64");
+//     encrypted += cipher.final("base64");
+
+//     const aesEncode = crypto
+//       .createHash("md5")
+//       .update(encrypted + kaya918MD5Key)
+//       .digest("hex")
+//       .toLowerCase();
+
+//     console.log("918KAYA Request Body:", requestBody);
+//     console.log("918KAYA AES-ENCODE:", aesEncode);
+
+//     const response = await axios.post(
+//       `${kaya918APIURL}v1/betdetail`,
+//       requestBody,
+//       {
+//         headers: {
+//           "Content-Type": "application/json",
+//           "AES-ENCODE": aesEncode,
+//           "Accept-Encoding": "gzip",
+//         },
+//       }
+//     );
+//     console.log(response.data);
+//     if (response.data.rtStatus !== 1) {
+//       return {
+//         success: false,
+//         error: response.data,
+//       };
+//     }
+
+//     return {
+//       success: true,
+//       data: response.data.data || [],
+//       dataCount: response.data.dataCount || 0,
+//     };
+//   } catch (error) {
+//     console.error("918KAYA error getting bet list:", error.message);
+//     return {
+//       success: false,
+//       error: error.message,
+//     };
+//   }
+// };
 
 module.exports = router;
 module.exports.kaya918CheckBalance = kaya918CheckBalance;
