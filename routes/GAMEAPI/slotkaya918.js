@@ -687,10 +687,9 @@ router.post(
         });
       }
 
-      const depositResponse = await kaya918Deposit(
-        user,
-        formattedDepositAmount * 10000
-      );
+      const depositAmountInCents = Math.round(formattedDepositAmount * 10000);
+
+      const depositResponse = await kaya918Deposit(user, depositAmountInCents);
 
       if (!depositResponse.success) {
         console.log(depositResponse, "dedposti failed");
