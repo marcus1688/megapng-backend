@@ -810,9 +810,11 @@ router.post(
         });
       }
 
+      const depositAmountInCents = Math.round(formattedWithdrawAmount * 10000);
+
       const withdrawResponse = await kaya918Withdraw(
         user,
-        formattedWithdrawAmount * 10000
+        depositAmountInCents
       );
 
       if (!withdrawResponse.success) {
