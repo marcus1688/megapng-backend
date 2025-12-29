@@ -5934,6 +5934,196 @@ router.post(
   }
 );
 
+// Validate Admin Direct Withdraw
+router.post(
+  "/admin/api/validate-direct-withdraw",
+  authenticateAdminToken,
+  async (req, res) => {
+    try {
+      const adminId = req.user.userId;
+      const adminuser = await adminUser.findById(adminId);
+      if (!adminuser) {
+        return res.status(200).json({
+          success: false,
+          message: {
+            en: "Admin User not found",
+            zh: "未找到管理员用户",
+          },
+        });
+      }
+
+      const {
+        userId,
+        username,
+        amount,
+        walletAmount,
+        bankId,
+        toWallet,
+        deductTransactionFees,
+        transactionId: customTransactionId,
+      } = req.body;
+
+      const kioskWithdrawAmount = Number(amount) || 0;
+      const walletWithdrawAmount = Number(walletAmount) || 0;
+      const totalBankAmount = kioskWithdrawAmount + walletWithdrawAmount;
+
+      if (!userId || !username) {
+        return res.status(200).json({
+          success: false,
+          message: {
+            en: "Invalid request data",
+            zh: "请求数据无效",
+          },
+        });
+      }
+
+      if (totalBankAmount <= 0) {
+        return res.status(200).json({
+          success: false,
+          message: {
+            en: "Invalid amount",
+            zh: "金额无效",
+          },
+        });
+      }
+
+      if (!toWallet && !bankId) {
+        return res.status(200).json({
+          success: false,
+          message: {
+            en: "Bank is required",
+            zh: "请选择银行",
+          },
+        });
+      }
+
+      const user = await User.findById(userId);
+      if (!user) {
+        return res.status(200).json({
+          success: false,
+          message: {
+            en: "User not found",
+            zh: "找不到用户",
+          },
+        });
+      }
+
+      if (!user.status) {
+        return res.status(200).json({
+          success: false,
+          message: {
+            en: "User account is suspended",
+            zh: "用户账户已被封锁",
+          },
+        });
+      }
+      const withdrawCountLimit = 100;
+      const malaysiaTimezone = "Asia/Kuala_Lumpur";
+      const todayStart = moment().tz(malaysiaTimezone).startOf("day").utc();
+      const todayEnd = moment().tz(malaysiaTimezone).endOf("day").utc();
+      const todayWithdrawalCount = await Withdraw.countDocuments({
+        userId: user._id,
+        status: "approved",
+        bankname: { $ne: "User Wallet" },
+        createdAt: {
+          $gte: todayStart.toDate(),
+          $lte: todayEnd.toDate(),
+        },
+      });
+      if (!toWallet && todayWithdrawalCount >= withdrawCountLimit) {
+        return res.status(200).json({
+          success: false,
+          message: {
+            en: `Daily withdrawal limit reached (maximum ${withdrawCountLimit} times per day). You've already made ${todayWithdrawalCount} withdrawal(s) today.`,
+            zh: `已达到每日提款限制（每天最多${withdrawCountLimit}次）。您今日已提款${todayWithdrawalCount}次。`,
+          },
+        });
+      }
+      if (walletWithdrawAmount > 0) {
+        if (Number(user.wallet) < walletWithdrawAmount) {
+          return res.status(200).json({
+            success: false,
+            message: {
+              en: `Insufficient wallet balance. Current: ${user.wallet}, Required: ${walletWithdrawAmount}`,
+              zh: `钱包余额不足。当前: ${user.wallet}，需要: ${walletWithdrawAmount}`,
+            },
+          });
+        }
+      }
+      let bank = null;
+      if (!toWallet) {
+        bank = await BankList.findById(bankId);
+        if (!bank) {
+          return res.status(200).json({
+            success: false,
+            message: {
+              en: "Bank not found",
+              zh: "找不到银行",
+            },
+          });
+        }
+
+        const transactionFeesAmount = deductTransactionFees
+          ? Number(bank.transactionfees) || 0
+          : 0;
+        const totalRequired = totalBankAmount + transactionFeesAmount;
+
+        if (bank.currentbalance < totalRequired) {
+          return res.status(200).json({
+            success: false,
+            message: {
+              en: `Insufficient bank balance. Current: ${
+                bank.currentbalance
+              }, Required: ${totalRequired}${
+                transactionFeesAmount > 0
+                  ? ` (includes transaction fees: ${transactionFeesAmount})`
+                  : ""
+              }`,
+              zh: `银行余额不足。当前: ${
+                bank.currentbalance
+              }，需要: ${totalRequired}${
+                transactionFeesAmount > 0
+                  ? `（含手续费: ${transactionFeesAmount}）`
+                  : ""
+              }`,
+            },
+          });
+        }
+      }
+      if (customTransactionId) {
+        const existingWithdraw = await Withdraw.findOne({
+          transactionId: customTransactionId,
+        });
+        if (existingWithdraw) {
+          return res.status(200).json({
+            success: false,
+            message: {
+              en: "Transaction ID already exists",
+              zh: "交易编号已存在",
+            },
+          });
+        }
+      }
+      res.status(200).json({
+        success: true,
+        message: {
+          en: "Validation passed",
+          zh: "验证通过",
+        },
+      });
+    } catch (error) {
+      console.error("Error in validate direct withdraw:", error);
+      res.status(500).json({
+        success: false,
+        message: {
+          en: "Internal server error",
+          zh: "服务器内部错误",
+        },
+      });
+    }
+  }
+);
+
 // Admin Direct Withdraw
 router.post(
   "/admin/api/admin-direct-withdraw",
