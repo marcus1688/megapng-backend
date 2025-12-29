@@ -760,6 +760,7 @@ router.get(
                 "cashout",
                 "adjustin",
                 "adjustout",
+                "transactionfee",
                 "transaction fees",
               ],
             },
@@ -804,7 +805,12 @@ router.get(
             totalTransactionFees: {
               $sum: {
                 $cond: [
-                  { $eq: ["$transactiontype", "transaction fees"] },
+                  {
+                    $in: [
+                      "$transactiontype",
+                      ["transactionfee", "transaction fees"],
+                    ],
+                  },
                   "$amount",
                   0,
                 ],

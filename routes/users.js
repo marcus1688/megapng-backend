@@ -2515,7 +2515,7 @@ router.post(
           remark: {
             $regex: `Transaction fees for withdraw ${withdraw.transactionId}`,
           },
-          transactiontype: "transaction fees",
+          transactiontype: "transactionfee",
         });
 
         if (feesLog) {
@@ -2540,7 +2540,7 @@ router.post(
             userid: user.userid,
             playerusername: user.username,
             playerfullname: user.fullname,
-            transactiontype: "reverted transaction fees",
+            transactiontype: "reverted transactionfee",
             amount: feesAmount,
           });
           await revertFeesLog.save();
@@ -6304,7 +6304,7 @@ router.post(
             userid: user.userid,
             playerusername: user.username,
             playerfullname: user.fullname,
-            transactiontype: "transaction fees",
+            transactiontype: "transactionfee",
             amount: transactionFeesAmount,
           });
           await feesLog.save();
