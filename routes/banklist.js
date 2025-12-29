@@ -749,14 +749,18 @@ router.get(
       const cashStats = await BankTransactionLog.aggregate([
         {
           $match: {
-            bankAccount: { $in: banks.map((b) => b.bankaccount) },
+            $or: banks.map((b) => ({
+              bankName: b.bankname,
+              bankAccount: b.bankaccount,
+              ownername: b.ownername,
+            })),
             transactiontype: {
               $in: [
                 "cashin",
                 "cashout",
                 "adjustin",
                 "adjustout",
-                "transactionfee",
+                "transaction fees",
               ],
             },
             ...dateFilter,
@@ -764,7 +768,11 @@ router.get(
         },
         {
           $group: {
-            _id: "$bankAccount",
+            _id: {
+              bankName: "$bankName",
+              bankAccount: "$bankAccount",
+              ownername: "$ownername",
+            },
             totalCashIn: {
               $sum: {
                 $cond: [{ $eq: ["$transactiontype", "cashin"] }, "$amount", 0],
@@ -796,7 +804,7 @@ router.get(
             totalTransactionFees: {
               $sum: {
                 $cond: [
-                  { $eq: ["$transactiontype", "transactionfee"] },
+                  { $eq: ["$transactiontype", "transaction fees"] },
                   "$amount",
                   0,
                 ],
@@ -808,13 +816,19 @@ router.get(
 
       const depositMap = new Map(depositStats.map((s) => [s._id, s]));
       const withdrawMap = new Map(withdrawStats.map((s) => [s._id, s]));
-      const cashMap = new Map(cashStats.map((s) => [s._id, s]));
+      const cashMap = new Map(
+        cashStats.map((s) => [
+          `${s._id.bankName}|${s._id.bankAccount}|${s._id.ownername}`,
+          s,
+        ])
+      );
 
       const reportData = banks.map((bank) => {
         const bankIdStr = bank._id.toString();
         const depositStat = depositMap.get(bankIdStr) || {};
         const withdrawStat = withdrawMap.get(bankIdStr) || {};
-        const cashStat = cashMap.get(bank.bankaccount) || {};
+        const cashKey = `${bank.bankname}|${bank.bankaccount}|${bank.ownername}`;
+        const cashStat = cashMap.get(cashKey) || {};
 
         return {
           id: bank._id,

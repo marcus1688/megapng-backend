@@ -5505,6 +5505,147 @@ router.get("/api/verify-magic-link/:token", async (req, res) => {
   }
 });
 
+// Validate Admin Direct Deposit
+router.post(
+  "/admin/api/validate-direct-deposit",
+  authenticateAdminToken,
+  async (req, res) => {
+    try {
+      const adminId = req.user.userId;
+      const adminuser = await adminUser.findById(adminId);
+      if (!adminuser) {
+        return res.status(200).json({
+          success: false,
+          message: {
+            en: "Admin User not found",
+            zh: "未找到管理员用户",
+          },
+        });
+      }
+      const {
+        userId,
+        username,
+        amount,
+        bankAmount,
+        walletSaveAmount,
+        bankId,
+        fromWallet,
+        transactionId: customTransactionId,
+      } = req.body;
+      const kioskDepositAmount = Number(amount) || 0;
+      const saveToWalletAmount = Number(walletSaveAmount) || 0;
+      if (!userId || !username) {
+        return res.status(200).json({
+          success: false,
+          message: {
+            en: "Invalid request data",
+            zh: "请求数据无效",
+          },
+        });
+      }
+      if (!fromWallet && kioskDepositAmount <= 0 && saveToWalletAmount <= 0) {
+        return res.status(200).json({
+          success: false,
+          message: {
+            en: "Invalid amount",
+            zh: "金额无效",
+          },
+        });
+      }
+      if (fromWallet && kioskDepositAmount <= 0) {
+        return res.status(200).json({
+          success: false,
+          message: {
+            en: "Invalid amount",
+            zh: "金额无效",
+          },
+        });
+      }
+      if (!fromWallet && !bankId) {
+        return res.status(200).json({
+          success: false,
+          message: {
+            en: "Bank is required",
+            zh: "请选择银行",
+          },
+        });
+      }
+      const user = await User.findById(userId);
+      if (!user) {
+        return res.status(200).json({
+          success: false,
+          message: {
+            en: "User not found",
+            zh: "找不到用户",
+          },
+        });
+      }
+      if (!user.status) {
+        return res.status(200).json({
+          success: false,
+          message: {
+            en: "User account is suspended",
+            zh: "用户账户已被封锁",
+          },
+        });
+      }
+      if (fromWallet) {
+        if (Number(user.wallet) < kioskDepositAmount) {
+          return res.status(200).json({
+            success: false,
+            message: {
+              en: `Insufficient wallet balance. Current: ${user.wallet}, Required: ${kioskDepositAmount}`,
+              zh: `钱包余额不足。当前: ${user.wallet}，需要: ${kioskDepositAmount}`,
+            },
+          });
+        }
+      }
+      if (!fromWallet) {
+        const bank = await BankList.findById(bankId);
+        if (!bank) {
+          return res.status(200).json({
+            success: false,
+            message: {
+              en: "Bank not found",
+              zh: "找不到银行",
+            },
+          });
+        }
+      }
+      if (customTransactionId) {
+        const existingDeposit = await Deposit.findOne({
+          transactionId: customTransactionId,
+        });
+        if (existingDeposit) {
+          return res.status(200).json({
+            success: false,
+            message: {
+              en: "Transaction ID already exists",
+              zh: "交易编号已存在",
+            },
+          });
+        }
+      }
+      res.status(200).json({
+        success: true,
+        message: {
+          en: "Validation passed",
+          zh: "验证通过",
+        },
+      });
+    } catch (error) {
+      console.error("Error in validate direct deposit:", error);
+      res.status(500).json({
+        success: false,
+        message: {
+          en: "Internal server error",
+          zh: "服务器内部错误",
+        },
+      });
+    }
+  }
+);
+
 // Admin Direct Deposit
 router.post(
   "/admin/api/admin-direct-deposit",
