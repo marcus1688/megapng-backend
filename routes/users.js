@@ -8749,9 +8749,7 @@ router.get(
               createdAt: { $lte: endDate },
             },
           },
-          {
-            $sort: { createdAt: -1 },
-          },
+          { $sort: { createdAt: -1 } },
           {
             $group: {
               _id: {
@@ -8773,9 +8771,7 @@ router.get(
               lastTransactionDate: 1,
             },
           },
-          {
-            $sort: { ownername: 1 },
-          },
+          { $sort: { ownername: 1 } },
         ]);
 
         const total = bankBalances.reduce((sum, b) => sum + b.balance, 0);
@@ -8852,7 +8848,14 @@ router.get(
               $match: {
                 bankName: { $not: /test/i },
                 transactiontype: {
-                  $in: ["cashin", "cashout", "adjustin", "adjustout"],
+                  $in: [
+                    "cashin",
+                    "cashout",
+                    "adjustin",
+                    "adjustout",
+                    "adjuststartingbalance",
+                    "adjust starting balance",
+                  ],
                 },
                 ...dateFilter2,
               },
@@ -8891,6 +8894,20 @@ router.get(
                   $sum: {
                     $cond: [
                       { $eq: ["$transactiontype", "adjustout"] },
+                      "$amount",
+                      0,
+                    ],
+                  },
+                },
+                totalAdjustStartingBalance: {
+                  $sum: {
+                    $cond: [
+                      {
+                        $in: [
+                          "$transactiontype",
+                          ["adjuststartingbalance", "adjust starting balance"],
+                        ],
+                      },
                       "$amount",
                       0,
                     ],
@@ -8962,6 +8979,8 @@ router.get(
         Math.round((cashStats[0]?.totalAdjustIn || 0) * 100) / 100;
       const totalAdjustOut =
         Math.round((cashStats[0]?.totalAdjustOut || 0) * 100) / 100;
+      const totalAdjustStartingBalance =
+        Math.round((cashStats[0]?.totalAdjustStartingBalance || 0) * 100) / 100;
 
       const date1CrossDayRevertDepositTotal =
         Math.round(
@@ -9008,6 +9027,7 @@ router.get(
             totalCashOut -
             totalAdjustIn +
             totalAdjustOut -
+            totalAdjustStartingBalance -
             date2CrossDayRevertDepositTotal +
             date2CrossDayRevertWithdrawTotal) *
             100
@@ -9071,9 +9091,10 @@ router.get(
               cashOut: totalCashOut,
               adjustIn: -totalAdjustIn,
               adjustOut: totalAdjustOut,
+              adjustStartingBalance: -totalAdjustStartingBalance,
               crossDayRevertDeposit: -date2CrossDayRevertDepositTotal,
               crossDayRevertWithdraw: date2CrossDayRevertWithdrawTotal,
-              formula: `${date2Data.totalBalance} - ${totalCashIn} + ${totalCashOut} - ${totalAdjustIn} + ${totalAdjustOut} - ${date2CrossDayRevertDepositTotal} + ${date2CrossDayRevertWithdrawTotal} = ${adjustedDate2Balance}`,
+              formula: `${date2Data.totalBalance} - ${totalCashIn} + ${totalCashOut} - ${totalAdjustIn} + ${totalAdjustOut} - ${totalAdjustStartingBalance} - ${date2CrossDayRevertDepositTotal} + ${date2CrossDayRevertWithdrawTotal} = ${adjustedDate2Balance}`,
             },
             crossDayReverts: {
               deposits: {
@@ -9110,6 +9131,7 @@ router.get(
             totalCashOut,
             totalAdjustIn,
             totalAdjustOut,
+            totalAdjustStartingBalance,
             expectedChange,
             isMatched,
             discrepancy: isMatched
@@ -9641,6 +9663,12 @@ const generateMonthlyReportImage = async (
     { key: "adjustIn", header: "ADJ IN", width: 95, type: "currency" },
     { key: "adjustOut", header: "ADJ OUT", width: 95, type: "currency" },
     {
+      key: "adjustStartingBalance",
+      header: "ADJ START",
+      width: 95,
+      type: "currency",
+    },
+    {
       key: "crossDayRevertDeposit",
       header: "CD REV DEP",
       width: 95,
@@ -9800,6 +9828,7 @@ const generateMonthlyReportImage = async (
     cashOut: totals.cashOut,
     adjustIn: totals.adjustIn,
     adjustOut: totals.adjustOut,
+    adjustStartingBalance: totals.adjustStartingBalance,
     crossDayRevertDeposit: totals.crossDayRevertDeposit,
     crossDayRevertWithdraw: totals.crossDayRevertWithdraw,
     bankBalanceEnd: bankBalance.end,
@@ -9854,6 +9883,7 @@ const getMonthlyReportData = async (year, month, endDay) => {
     cashOut: 0,
     adjustIn: 0,
     adjustOut: 0,
+    adjustStartingBalance: 0,
     crossDayRevertDeposit: 0,
     crossDayRevertWithdraw: 0,
   };
@@ -9996,7 +10026,14 @@ const getMonthlyReportData = async (year, month, endDay) => {
           $match: {
             bankName: { $not: /test/i },
             transactiontype: {
-              $in: ["cashin", "cashout", "adjustin", "adjustout"],
+              $in: [
+                "cashin",
+                "cashout",
+                "adjustin",
+                "adjustout",
+                "adjuststartingbalance",
+                "adjust starting balance",
+              ],
             },
             ...dateFilter,
           },
@@ -10027,6 +10064,20 @@ const getMonthlyReportData = async (year, month, endDay) => {
               $sum: {
                 $cond: [
                   { $eq: ["$transactiontype", "adjustout"] },
+                  "$amount",
+                  0,
+                ],
+              },
+            },
+            totalAdjustStartingBalance: {
+              $sum: {
+                $cond: [
+                  {
+                    $in: [
+                      "$transactiontype",
+                      ["adjuststartingbalance", "adjust starting balance"],
+                    ],
+                  },
                   "$amount",
                   0,
                 ],
@@ -10063,6 +10114,8 @@ const getMonthlyReportData = async (year, month, endDay) => {
     const adjustIn = Math.round((cashStats[0]?.totalAdjustIn || 0) * 100) / 100;
     const adjustOut =
       Math.round((cashStats[0]?.totalAdjustOut || 0) * 100) / 100;
+    const adjustStartingBalance =
+      Math.round((cashStats[0]?.totalAdjustStartingBalance || 0) * 100) / 100;
     const crossDayRevertDepositTotal =
       Math.round(
         crossDayRevertDeposits.reduce(
@@ -10084,7 +10137,7 @@ const getMonthlyReportData = async (year, month, endDay) => {
     const activePlayer = [...new Set([...depositPlayers, ...withdrawPlayers])]
       .length;
 
-    // Daily report - 直接用 bankBalanceEnd，不做调整
+    // Daily report
     dailyReports.push({
       date: currentDate.format("DD/MM/YYYY"),
       deposit,
@@ -10100,6 +10153,7 @@ const getMonthlyReportData = async (year, month, endDay) => {
       cashOut,
       adjustIn,
       adjustOut,
+      adjustStartingBalance,
       crossDayRevertDeposit: crossDayRevertDepositTotal,
       crossDayRevertWithdraw: crossDayRevertWithdrawTotal,
       bankBalanceEnd,
@@ -10118,6 +10172,7 @@ const getMonthlyReportData = async (year, month, endDay) => {
     totals.cashOut += cashOut;
     totals.adjustIn += adjustIn;
     totals.adjustOut += adjustOut;
+    totals.adjustStartingBalance += adjustStartingBalance;
     totals.crossDayRevertDeposit += crossDayRevertDepositTotal;
     totals.crossDayRevertWithdraw += crossDayRevertWithdrawTotal;
   }
@@ -10299,6 +10354,7 @@ if (process.env.NODE_ENV !== "development") {
         const date1 = dayBefore.format("YYYY-MM-DD");
         const date2 = yesterday.format("YYYY-MM-DD");
         console.log(`Checking daily balance for ${date2}...`);
+
         const endOfDate1 = moment
           .tz(date1, "Asia/Kuala_Lumpur")
           .endOf("day")
@@ -10426,7 +10482,14 @@ if (process.env.NODE_ENV !== "development") {
                 $match: {
                   bankName: { $not: /test/i },
                   transactiontype: {
-                    $in: ["cashin", "cashout", "adjustin", "adjustout"],
+                    $in: [
+                      "cashin",
+                      "cashout",
+                      "adjustin",
+                      "adjustout",
+                      "adjuststartingbalance",
+                      "adjust starting balance",
+                    ],
                   },
                   ...dateFilter2,
                 },
@@ -10465,6 +10528,23 @@ if (process.env.NODE_ENV !== "development") {
                     $sum: {
                       $cond: [
                         { $eq: ["$transactiontype", "adjustout"] },
+                        "$amount",
+                        0,
+                      ],
+                    },
+                  },
+                  totalAdjustStartingBalance: {
+                    $sum: {
+                      $cond: [
+                        {
+                          $in: [
+                            "$transactiontype",
+                            [
+                              "adjuststartingbalance",
+                              "adjust starting balance",
+                            ],
+                          ],
+                        },
                         "$amount",
                         0,
                       ],
@@ -10536,6 +10616,9 @@ if (process.env.NODE_ENV !== "development") {
           Math.round((cashStats[0]?.totalAdjustIn || 0) * 100) / 100;
         const totalAdjustOut =
           Math.round((cashStats[0]?.totalAdjustOut || 0) * 100) / 100;
+        const totalAdjustStartingBalance =
+          Math.round((cashStats[0]?.totalAdjustStartingBalance || 0) * 100) /
+          100;
 
         const date1CrossDayRevertDepositTotal =
           Math.round(
@@ -10582,6 +10665,7 @@ if (process.env.NODE_ENV !== "development") {
               totalCashOut -
               totalAdjustIn +
               totalAdjustOut -
+              totalAdjustStartingBalance -
               date2CrossDayRevertDepositTotal +
               date2CrossDayRevertWithdrawTotal) *
               100
@@ -10597,6 +10681,7 @@ if (process.env.NODE_ENV !== "development") {
         const discrepancy = isMatched
           ? 0
           : Math.round((difference - expectedChange) * 100) / 100;
+
         const verificationData = {
           date1: {
             date: date1,
@@ -10643,9 +10728,10 @@ if (process.env.NODE_ENV !== "development") {
               cashOut: totalCashOut,
               adjustIn: -totalAdjustIn,
               adjustOut: totalAdjustOut,
+              adjustStartingBalance: -totalAdjustStartingBalance,
               crossDayRevertDeposit: -date2CrossDayRevertDepositTotal,
               crossDayRevertWithdraw: date2CrossDayRevertWithdrawTotal,
-              formula: `${date2Data.totalBalance} - ${totalCashIn} + ${totalCashOut} - ${totalAdjustIn} + ${totalAdjustOut} - ${date2CrossDayRevertDepositTotal} + ${date2CrossDayRevertWithdrawTotal} = ${adjustedDate2Balance}`,
+              formula: `${date2Data.totalBalance} - ${totalCashIn} + ${totalCashOut} - ${totalAdjustIn} + ${totalAdjustOut} - ${totalAdjustStartingBalance} - ${date2CrossDayRevertDepositTotal} + ${date2CrossDayRevertWithdrawTotal} = ${adjustedDate2Balance}`,
             },
             crossDayReverts: {
               deposits: {
@@ -10682,6 +10768,7 @@ if (process.env.NODE_ENV !== "development") {
             totalCashOut,
             totalAdjustIn,
             totalAdjustOut,
+            totalAdjustStartingBalance,
             expectedChange,
             isMatched,
             discrepancy,
@@ -10707,7 +10794,7 @@ if (process.env.NODE_ENV !== "development") {
 ├ Adjusted Balance: ${formatCurrency(adjustedDate2Balance)}
 └ Formula: ${
             date2Data.totalBalance
-          } - ${totalCashIn} + ${totalCashOut} - ${totalAdjustIn} + ${totalAdjustOut} - ${date2CrossDayRevertDepositTotal} + ${date2CrossDayRevertWithdrawTotal} = ${adjustedDate2Balance}
+          } - ${totalCashIn} + ${totalCashOut} - ${totalAdjustIn} + ${totalAdjustOut} - ${totalAdjustStartingBalance} - ${date2CrossDayRevertDepositTotal} + ${date2CrossDayRevertWithdrawTotal} = ${adjustedDate2Balance}
 
 <b>💰 Verification (${date2}):</b>
 ├ Deposit: ${formatCurrency(totalDeposit)}
@@ -10717,6 +10804,7 @@ if (process.env.NODE_ENV !== "development") {
 ├ Cash Out: ${formatCurrency(totalCashOut)}
 ├ Adjust In: ${formatCurrency(totalAdjustIn)}
 ├ Adjust Out: ${formatCurrency(totalAdjustOut)}
+├ Adjust Starting Balance: ${formatCurrency(totalAdjustStartingBalance)}
 ├ Expected Change: ${formatCurrency(expectedChange)}
 ├ Actual Difference: ${formatCurrency(difference)}
 └ <b>Discrepancy: ${formatCurrency(discrepancy)}</b>
@@ -10748,9 +10836,11 @@ if (process.env.NODE_ENV !== "development") {
           );
           return;
         }
+
         console.log(
           `Balance check passed for ${date2}, sending monthly report...`
         );
+
         const data = await getMonthlyReportData(year, month, endDay);
         const imagePath = await generateMonthlyReportImage(
           data.dailyReports,
@@ -10760,9 +10850,11 @@ if (process.env.NODE_ENV !== "development") {
           month,
           endDay
         );
+
         const caption = `📊 <b>MEGAPNG Monthly Report</b>\n📅 ${month}/${year} (Day 1-${endDay})\n✅ Daily balance verified`;
         await sendTelegramDocument(imagePath, caption);
         fs.unlinkSync(imagePath);
+
         console.log(
           `Monthly report sent: 01/${month}/${year} - ${endDay}/${month}/${year}`
         );
