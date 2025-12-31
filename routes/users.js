@@ -9644,7 +9644,7 @@ const generateMonthlyReportImage = async (
   const paddedMonth = month.toString().padStart(2, "0");
 
   // 高清比例（1 = 普通，2 = 2倍高清，3 = 3倍高清）
-  const scale = 4;
+  const scale = 3;
 
   // 表格配置
   const columns = [
