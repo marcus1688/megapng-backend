@@ -7,6 +7,9 @@ const {
   adminUserWalletLog,
   GameDataLog,
 } = require("../models/users.model");
+const cron = require("node-cron");
+const FormData = require("form-data");
+const fs = require("fs");
 const UserBankList = require("../models/userbanklist.model");
 const { addContactToGoogle } = require("../utils/googleContact");
 const Promotion = require("../models/promotion.model");
@@ -4042,12 +4045,16 @@ router.get(
     try {
       const { startDate, endDate } = req.query;
       const dateFilter = {};
+      let endDateMoment = null;
+
       if (startDate && endDate) {
         dateFilter.createdAt = {
           $gte: moment(new Date(startDate)).utc().toDate(),
           $lte: moment(new Date(endDate)).utc().toDate(),
         };
+        endDateMoment = moment(new Date(endDate)).utc().toDate();
       }
+
       const [
         depositStats,
         withdrawStats,
@@ -4303,6 +4310,85 @@ router.get(
         ]),
       ]);
 
+      // 找跨天 revert 的 deposit 和 withdraw
+      let crossDayReverts = {
+        deposits: { count: 0, total: 0, items: [] },
+        withdraws: { count: 0, total: 0, items: [] },
+        totalCount: 0,
+        netAdjustment: 0,
+      };
+
+      if (endDateMoment) {
+        const [crossDayRevertDeposits, crossDayRevertWithdraws] =
+          await Promise.all([
+            Deposit.find({
+              status: "reverted",
+              reverted: true,
+              bankname: { $ne: "User Wallet" },
+              ...dateFilter,
+              updatedAt: { $gt: endDateMoment },
+            }).select(
+              "transactionId username amount bankAmount createdAt updatedAt"
+            ),
+            Withdraw.find({
+              status: "reverted",
+              reverted: true,
+              bankname: { $ne: "User Wallet" },
+              ...dateFilter,
+              updatedAt: { $gt: endDateMoment },
+            }).select(
+              "transactionId username amount bankAmount createdAt updatedAt"
+            ),
+          ]);
+
+        const crossDayRevertDepositTotal =
+          Math.round(
+            crossDayRevertDeposits.reduce(
+              (sum, d) => sum + (d.bankAmount || d.amount),
+              0
+            ) * 100
+          ) / 100;
+
+        const crossDayRevertWithdrawTotal =
+          Math.round(
+            crossDayRevertWithdraws.reduce(
+              (sum, w) => sum + (w.bankAmount || w.amount),
+              0
+            ) * 100
+          ) / 100;
+
+        crossDayReverts = {
+          deposits: {
+            count: crossDayRevertDeposits.length,
+            total: crossDayRevertDepositTotal,
+            items: crossDayRevertDeposits.map((d) => ({
+              transactionId: d.transactionId,
+              username: d.username,
+              amount: d.bankAmount || d.amount,
+              createdAt: d.createdAt,
+              revertedAt: d.updatedAt,
+            })),
+          },
+          withdraws: {
+            count: crossDayRevertWithdraws.length,
+            total: crossDayRevertWithdrawTotal,
+            items: crossDayRevertWithdraws.map((w) => ({
+              transactionId: w.transactionId,
+              username: w.username,
+              amount: w.bankAmount || w.amount,
+              createdAt: w.createdAt,
+              revertedAt: w.updatedAt,
+            })),
+          },
+          totalCount:
+            crossDayRevertDeposits.length + crossDayRevertWithdraws.length,
+          netAdjustment:
+            Math.round(
+              (crossDayRevertDepositTotal - crossDayRevertWithdrawTotal) * 100
+            ) / 100,
+        };
+      }
+
       const newDepositBreakdown = await Deposit.aggregate([
         {
           $match: {
@@ -4353,16 +4439,20 @@ router.get(
         },
       ]);
 
+      const totalDeposit = depositStats[0]?.totalDeposit || 0;
+      const totalWithdraw = withdrawStats[0]?.totalWithdraw || 0;
+      const winLose = totalDeposit - totalWithdraw;
+
       const reportData = {
         depositQty: depositStats[0]?.depositQty || 0,
-        totalDeposit: depositStats[0]?.totalDeposit || 0,
+        totalDeposit,
         withdrawQty: withdrawStats[0]?.withdrawQty || 0,
-        totalWithdraw: withdrawStats[0]?.totalWithdraw || 0,
+        totalWithdraw,
         totalBonus: bonusStats[0]?.totalBonus || 0,
         totalRebate: rebateStats[0]?.totalRebate || 0,
-        winLose:
-          (depositStats[0]?.totalDeposit || 0) -
-          (withdrawStats[0]?.totalWithdraw || 0),
+        winLose,
+        adjustedWinLose:
+          Math.round((winLose + crossDayReverts.netAdjustment) * 100) / 100,
         depositActivePlayers: depositStats[0]?.uniquePlayers?.length || 0,
         withdrawActivePlayers: withdrawStats[0]?.uniquePlayers?.length || 0,
         activePlayers: (() => {
@@ -4371,12 +4461,6 @@ router.get(
           const allPlayers = [
             ...new Set([...depositPlayers, ...withdrawPlayers]),
           ];
-          // console.log("=== Active Players Debug ===");
-          // console.log("Deposit Players:", depositPlayers);
-          // console.log("Withdraw Players:", withdrawPlayers);
-          // console.log("All Unique Active Players:", allPlayers);
-          // console.log("Total Active Players Count:", allPlayers.length);
-          // console.log("============================");
           return allPlayers.length;
         })(),
         newDeposits: newDepositCount || 0,
@@ -4406,7 +4490,9 @@ router.get(
               )
             )
           : "00:00:00",
+        crossDayReverts,
       };
+
       res.status(200).json({
         success: true,
         message: "Report data retrieved successfully",
@@ -8617,5 +8703,2085 @@ router.get(
     }
   }
 );
+
+// Admin Get Daily Total Balance Comparison
+// http://localhost:3001/admin/api/daily-balance-comparison?date1=2025-12-30&date2=2025-12-31
+router.get(
+  "/admin/api/daily-balance-comparison",
+  authenticateAdminToken,
+  async (req, res) => {
+    try {
+      const { date1, date2 } = req.query;
+
+      if (!date1 || !date2) {
+        return res.status(400).json({
+          success: false,
+          message: "Please provide date1 and date2",
+        });
+      }
+
+      const endOfDate1 = moment
+        .tz(date1, "Asia/Kuala_Lumpur")
+        .endOf("day")
+        .utc()
+        .toDate();
+      const endOfDate2 = moment
+        .tz(date2, "Asia/Kuala_Lumpur")
+        .endOf("day")
+        .utc()
+        .toDate();
+      const startOfDate1 = moment
+        .tz(date1, "Asia/Kuala_Lumpur")
+        .startOf("day")
+        .utc()
+        .toDate();
+      const startOfDate2 = moment
+        .tz(date2, "Asia/Kuala_Lumpur")
+        .startOf("day")
+        .utc()
+        .toDate();
+
+      const getBalancesAtDate = async (endDate) => {
+        const bankBalances = await BankTransactionLog.aggregate([
+          {
+            $match: {
+              bankName: { $not: /test/i },
+              createdAt: { $lte: endDate },
+            },
+          },
+          {
+            $sort: { createdAt: -1 },
+          },
+          {
+            $group: {
+              _id: {
+                bankName: "$bankName",
+                bankAccount: "$bankAccount",
+                ownername: "$ownername",
+              },
+              lastBalance: { $first: "$currentBalance" },
+              lastTransactionDate: { $first: "$createdAt" },
+            },
+          },
+          {
+            $project: {
+              _id: 0,
+              bankName: "$_id.bankName",
+              bankAccount: "$_id.bankAccount",
+              ownername: "$_id.ownername",
+              balance: { $round: ["$lastBalance", 2] },
+              lastTransactionDate: 1,
+            },
+          },
+          {
+            $sort: { ownername: 1 },
+          },
+        ]);
+
+        const total = bankBalances.reduce((sum, b) => sum + b.balance, 0);
+        const totalBalance = Math.round(total * 100) / 100;
+
+        return {
+          banks: bankBalances,
+          totalBalance,
+        };
+      };
+
+      const dateFilter2 = {
+        createdAt: {
+          $gte: startOfDate2,
+          $lte: endOfDate2,
+        },
+      };
+
+      const [depositStats, withdrawStats, feeStats, cashStats] =
+        await Promise.all([
+          Deposit.aggregate([
+            {
+              $match: {
+                status: "approved",
+                reverted: false,
+                bankname: { $ne: "User Wallet" },
+                ...dateFilter2,
+              },
+            },
+            {
+              $group: {
+                _id: null,
+                totalDeposit: { $sum: { $ifNull: ["$bankAmount", "$amount"] } },
+              },
+            },
+          ]),
+          Withdraw.aggregate([
+            {
+              $match: {
+                status: "approved",
+                reverted: false,
+                bankname: { $ne: "User Wallet" },
+                ...dateFilter2,
+              },
+            },
+            {
+              $group: {
+                _id: null,
+                totalWithdraw: {
+                  $sum: { $ifNull: ["$bankAmount", "$amount"] },
+                },
+              },
+            },
+          ]),
+          BankTransactionLog.aggregate([
+            {
+              $match: {
+                bankName: { $not: /test/i },
+                transactiontype: {
+                  $in: ["transactionfee", "transaction fees"],
+                },
+                ...dateFilter2,
+              },
+            },
+            {
+              $group: {
+                _id: null,
+                totalTransactionFee: { $sum: "$amount" },
+              },
+            },
+          ]),
+          BankTransactionLog.aggregate([
+            {
+              $match: {
+                bankName: { $not: /test/i },
+                transactiontype: {
+                  $in: ["cashin", "cashout", "adjustin", "adjustout"],
+                },
+                ...dateFilter2,
+              },
+            },
+            {
+              $group: {
+                _id: null,
+                totalCashIn: {
+                  $sum: {
+                    $cond: [
+                      { $eq: ["$transactiontype", "cashin"] },
+                      "$amount",
+                      0,
+                    ],
+                  },
+                },
+                totalCashOut: {
+                  $sum: {
+                    $cond: [
+                      { $eq: ["$transactiontype", "cashout"] },
+                      "$amount",
+                      0,
+                    ],
+                  },
+                },
+                totalAdjustIn: {
+                  $sum: {
+                    $cond: [
+                      { $eq: ["$transactiontype", "adjustin"] },
+                      "$amount",
+                      0,
+                    ],
+                  },
+                },
+                totalAdjustOut: {
+                  $sum: {
+                    $cond: [
+                      { $eq: ["$transactiontype", "adjustout"] },
+                      "$amount",
+                      0,
+                    ],
+                  },
+                },
+              },
+            },
+          ]),
+        ]);
+
+      const [date1CrossDayRevertDeposits, date1CrossDayRevertWithdraws] =
+        await Promise.all([
+          Deposit.find({
+            status: "reverted",
+            reverted: true,
+            bankname: { $ne: "User Wallet" },
+            createdAt: { $gte: startOfDate1, $lte: endOfDate1 },
+            updatedAt: { $gt: endOfDate1 },
+          }).select(
+            "transactionId username amount bankAmount createdAt updatedAt"
+          ),
+          Withdraw.find({
+            status: "reverted",
+            reverted: true,
+            bankname: { $ne: "User Wallet" },
+            createdAt: { $gte: startOfDate1, $lte: endOfDate1 },
+            updatedAt: { $gt: endOfDate1 },
+          }).select(
+            "transactionId username amount bankAmount createdAt updatedAt"
+          ),
+        ]);
+
+      const [date2CrossDayRevertDeposits, date2CrossDayRevertWithdraws] =
+        await Promise.all([
+          Deposit.find({
+            status: "reverted",
+            reverted: true,
+            bankname: { $ne: "User Wallet" },
+            createdAt: { $gte: startOfDate2, $lte: endOfDate2 },
+            updatedAt: { $gt: endOfDate2 },
+          }).select(
+            "transactionId username amount bankAmount createdAt updatedAt"
+          ),
+          Withdraw.find({
+            status: "reverted",
+            reverted: true,
+            bankname: { $ne: "User Wallet" },
+            createdAt: { $gte: startOfDate2, $lte: endOfDate2 },
+            updatedAt: { $gt: endOfDate2 },
+          }).select(
+            "transactionId username amount bankAmount createdAt updatedAt"
+          ),
+        ]);
+
+      const date1Data = await getBalancesAtDate(endOfDate1);
+      const date2Data = await getBalancesAtDate(endOfDate2);
+
+      const totalDeposit =
+        Math.round((depositStats[0]?.totalDeposit || 0) * 100) / 100;
+      const totalWithdraw =
+        Math.round((withdrawStats[0]?.totalWithdraw || 0) * 100) / 100;
+      const totalTransactionFee =
+        Math.round((feeStats[0]?.totalTransactionFee || 0) * 100) / 100;
+      const totalCashIn =
+        Math.round((cashStats[0]?.totalCashIn || 0) * 100) / 100;
+      const totalCashOut =
+        Math.round((cashStats[0]?.totalCashOut || 0) * 100) / 100;
+      const totalAdjustIn =
+        Math.round((cashStats[0]?.totalAdjustIn || 0) * 100) / 100;
+      const totalAdjustOut =
+        Math.round((cashStats[0]?.totalAdjustOut || 0) * 100) / 100;
+
+      const date1CrossDayRevertDepositTotal =
+        Math.round(
+          date1CrossDayRevertDeposits.reduce(
+            (sum, d) => sum + (d.bankAmount || d.amount),
+            0
+          ) * 100
+        ) / 100;
+      const date1CrossDayRevertWithdrawTotal =
+        Math.round(
+          date1CrossDayRevertWithdraws.reduce(
+            (sum, w) => sum + (w.bankAmount || w.amount),
+            0
+          ) * 100
+        ) / 100;
+
+      const date2CrossDayRevertDepositTotal =
+        Math.round(
+          date2CrossDayRevertDeposits.reduce(
+            (sum, d) => sum + (d.bankAmount || d.amount),
+            0
+          ) * 100
+        ) / 100;
+      const date2CrossDayRevertWithdrawTotal =
+        Math.round(
+          date2CrossDayRevertWithdraws.reduce(
+            (sum, w) => sum + (w.bankAmount || w.amount),
+            0
+          ) * 100
+        ) / 100;
+
+      const adjustedDate1Balance =
+        Math.round(
+          (date1Data.totalBalance -
+            date1CrossDayRevertDepositTotal +
+            date1CrossDayRevertWithdrawTotal) *
+            100
+        ) / 100;
+
+      const adjustedDate2Balance =
+        Math.round(
+          (date2Data.totalBalance -
+            totalCashIn +
+            totalCashOut -
+            totalAdjustIn +
+            totalAdjustOut -
+            date2CrossDayRevertDepositTotal +
+            date2CrossDayRevertWithdrawTotal) *
+            100
+        ) / 100;
+
+      const difference =
+        Math.round((adjustedDate2Balance - adjustedDate1Balance) * 100) / 100;
+
+      const expectedChange =
+        Math.round((totalDeposit - totalWithdraw - totalTransactionFee) * 100) /
+        100;
+
+      const isMatched = difference === expectedChange;
+
+      res.status(200).json({
+        success: true,
+        message: "Daily balance comparison retrieved successfully",
+        data: {
+          date1: {
+            date: date1,
+            banks: date1Data.banks,
+            totalBalance: date1Data.totalBalance,
+            adjustedBalance: adjustedDate1Balance,
+            adjustmentDetails: {
+              crossDayRevertDeposit: -date1CrossDayRevertDepositTotal,
+              crossDayRevertWithdraw: date1CrossDayRevertWithdrawTotal,
+              formula: `${date1Data.totalBalance} - ${date1CrossDayRevertDepositTotal} + ${date1CrossDayRevertWithdrawTotal} = ${adjustedDate1Balance}`,
+            },
+            crossDayReverts: {
+              deposits: {
+                count: date1CrossDayRevertDeposits.length,
+                total: date1CrossDayRevertDepositTotal,
+                items: date1CrossDayRevertDeposits.map((d) => ({
+                  transactionId: d.transactionId,
+                  username: d.username,
+                  amount: d.bankAmount || d.amount,
+                  createdAt: d.createdAt,
+                  revertedAt: d.updatedAt,
+                })),
+              },
+              withdraws: {
+                count: date1CrossDayRevertWithdraws.length,
+                total: date1CrossDayRevertWithdrawTotal,
+                items: date1CrossDayRevertWithdraws.map((w) => ({
+                  transactionId: w.transactionId,
+                  username: w.username,
+                  amount: w.bankAmount || w.amount,
+                  createdAt: w.createdAt,
+                  revertedAt: w.updatedAt,
+                })),
+              },
+            },
+          },
+          date2: {
+            date: date2,
+            banks: date2Data.banks,
+            totalBalance: date2Data.totalBalance,
+            adjustedBalance: adjustedDate2Balance,
+            adjustmentDetails: {
+              cashIn: -totalCashIn,
+              cashOut: totalCashOut,
+              adjustIn: -totalAdjustIn,
+              adjustOut: totalAdjustOut,
+              crossDayRevertDeposit: -date2CrossDayRevertDepositTotal,
+              crossDayRevertWithdraw: date2CrossDayRevertWithdrawTotal,
+              formula: `${date2Data.totalBalance} - ${totalCashIn} + ${totalCashOut} - ${totalAdjustIn} + ${totalAdjustOut} - ${date2CrossDayRevertDepositTotal} + ${date2CrossDayRevertWithdrawTotal} = ${adjustedDate2Balance}`,
+            },
+            crossDayReverts: {
+              deposits: {
+                count: date2CrossDayRevertDeposits.length,
+                total: date2CrossDayRevertDepositTotal,
+                items: date2CrossDayRevertDeposits.map((d) => ({
+                  transactionId: d.transactionId,
+                  username: d.username,
+                  amount: d.bankAmount || d.amount,
+                  createdAt: d.createdAt,
+                  revertedAt: d.updatedAt,
+                })),
+              },
+              withdraws: {
+                count: date2CrossDayRevertWithdraws.length,
+                total: date2CrossDayRevertWithdrawTotal,
+                items: date2CrossDayRevertWithdraws.map((w) => ({
+                  transactionId: w.transactionId,
+                  username: w.username,
+                  amount: w.bankAmount || w.amount,
+                  createdAt: w.createdAt,
+                  revertedAt: w.updatedAt,
+                })),
+              },
+            },
+          },
+          difference,
+          verification: {
+            date: date2,
+            totalDeposit,
+            totalWithdraw,
+            totalTransactionFee,
+            totalCashIn,
+            totalCashOut,
+            totalAdjustIn,
+            totalAdjustOut,
+            expectedChange,
+            isMatched,
+            discrepancy: isMatched
+              ? 0
+              : Math.round((difference - expectedChange) * 100) / 100,
+          },
+        },
+      });
+    } catch (error) {
+      console.error("Error getting daily balance comparison:", error);
+      res.status(500).json({
+        success: false,
+        message: "Internal server error",
+        error: error.toString(),
+      });
+    }
+  }
+);
+
+// Admin Get Monthly Daily Report
+// http://localhost:3001/admin/api/monthly-daily-report?year=2025&month=12
+router.get(
+  "/admin/api/monthly-daily-report",
+  authenticateAdminToken,
+  async (req, res) => {
+    try {
+      const { year, month } = req.query;
+
+      if (!year || !month) {
+        return res.status(400).json({
+          success: false,
+          message: "Please provide year and month",
+        });
+      }
+
+      const timezone = "Asia/Kuala_Lumpur";
+      const paddedMonth = month.toString().padStart(2, "0");
+      const startOfMonth = moment
+        .tz(`${year}-${paddedMonth}-01`, "YYYY-MM-DD", timezone)
+        .startOf("month");
+      const endOfMonth = moment
+        .tz(`${year}-${paddedMonth}-01`, "YYYY-MM-DD", timezone)
+        .endOf("month");
+      const today = moment.tz(timezone);
+
+      // 如果是当前月，只到今天
+      const lastDay = endOfMonth.isAfter(today) ? today : endOfMonth;
+      const daysInRange = lastDay.date();
+
+      const dailyReports = [];
+      const totals = {
+        deposit: 0,
+        withdraw: 0,
+        bankFee: 0,
+        nett: 0,
+        bonus: 0,
+        transaction: 0,
+        activePlayer: 0,
+        newDeposit: 0,
+        register: 0,
+        cashIn: 0,
+        cashOut: 0,
+        adjustIn: 0,
+        adjustOut: 0,
+        crossDayRevertDeposit: 0,
+        crossDayRevertWithdraw: 0,
+      };
+
+      // 获取银行余额的函数
+      const getBankBalanceAtDate = async (endDate) => {
+        const bankBalances = await BankTransactionLog.aggregate([
+          {
+            $match: {
+              bankName: { $not: /test/i },
+              createdAt: { $lte: endDate },
+            },
+          },
+          {
+            $sort: { createdAt: -1 },
+          },
+          {
+            $group: {
+              _id: {
+                bankName: "$bankName",
+                bankAccount: "$bankAccount",
+                ownername: "$ownername",
+              },
+              lastBalance: { $first: "$currentBalance" },
+            },
+          },
+        ]);
+
+        const total = bankBalances.reduce(
+          (sum, b) => sum + (b.lastBalance || 0),
+          0
+        );
+        return Math.round(total * 100) / 100;
+      };
+
+      for (let day = 1; day <= daysInRange; day++) {
+        const paddedDay = day.toString().padStart(2, "0");
+        const currentDate = moment.tz(
+          `${year}-${paddedMonth}-${paddedDay}`,
+          "YYYY-MM-DD",
+          timezone
+        );
+        const prevDate = currentDate.clone().subtract(1, "day");
+
+        const startOfDay = currentDate.clone().startOf("day").utc().toDate();
+        const endOfDay = currentDate.clone().endOf("day").utc().toDate();
+        const endOfPrevDay = prevDate.clone().endOf("day").utc().toDate();
+
+        const dateFilter = {
+          createdAt: {
+            $gte: startOfDay,
+            $lte: endOfDay,
+          },
+        };
+
+        const [
+          depositStats,
+          withdrawStats,
+          feeStats,
+          bonusStats,
+          transactionCount,
+          newDepositCount,
+          registerCount,
+          cashStats,
+          crossDayRevertDeposits,
+          crossDayRevertWithdraws,
+          bankBalanceEnd,
+          bankBalancePrev,
+        ] = await Promise.all([
+          // Deposit
+          Deposit.aggregate([
+            {
+              $match: {
+                status: "approved",
+                reverted: false,
+                bankname: { $ne: "User Wallet" },
+                ...dateFilter,
+              },
+            },
+            {
+              $group: {
+                _id: null,
+                total: { $sum: { $ifNull: ["$bankAmount", "$amount"] } },
+                uniquePlayers: { $addToSet: "$username" },
+              },
+            },
+          ]),
+          // Withdraw
+          Withdraw.aggregate([
+            {
+              $match: {
+                status: "approved",
+                reverted: false,
+                bankname: { $ne: "User Wallet" },
+                ...dateFilter,
+              },
+            },
+            {
+              $group: {
+                _id: null,
+                total: { $sum: { $ifNull: ["$bankAmount", "$amount"] } },
+                uniquePlayers: { $addToSet: "$username" },
+              },
+            },
+          ]),
+          // Transaction Fee
+          BankTransactionLog.aggregate([
+            {
+              $match: {
+                bankName: { $not: /test/i },
+                transactiontype: {
+                  $in: ["transactionfee", "transaction fees"],
+                },
+                ...dateFilter,
+              },
+            },
+            {
+              $group: {
+                _id: null,
+                total: { $sum: "$amount" },
+              },
+            },
+          ]),
+          // Bonus
+          Bonus.aggregate([
+            {
+              $match: {
+                status: "approved",
+                reverted: false,
+                ...dateFilter,
+              },
+            },
+            {
+              $group: {
+                _id: null,
+                total: { $sum: "$amount" },
+              },
+            },
+          ]),
+          // Transaction Count (deposit + withdraw)
+          Promise.all([
+            Deposit.countDocuments({
+              status: "approved",
+              reverted: false,
+              bankname: { $ne: "User Wallet" },
+              ...dateFilter,
+            }),
+            Withdraw.countDocuments({
+              status: "approved",
+              reverted: false,
+              bankname: { $ne: "User Wallet" },
+              ...dateFilter,
+            }),
+          ]),
+          // New Deposit
+          Deposit.countDocuments({
+            newDeposit: true,
+            status: "approved",
+            reverted: false,
+            ...dateFilter,
+          }),
+          // Register Count
+          User.countDocuments(dateFilter),
+          // Cash In / Cash Out / Adjust In / Adjust Out
+          BankTransactionLog.aggregate([
+            {
+              $match: {
+                bankName: { $not: /test/i },
+                transactiontype: {
+                  $in: ["cashin", "cashout", "adjustin", "adjustout"],
+                },
+                ...dateFilter,
+              },
+            },
+            {
+              $group: {
+                _id: null,
+                totalCashIn: {
+                  $sum: {
+                    $cond: [
+                      { $eq: ["$transactiontype", "cashin"] },
+                      "$amount",
+                      0,
+                    ],
+                  },
+                },
+                totalCashOut: {
+                  $sum: {
+                    $cond: [
+                      { $eq: ["$transactiontype", "cashout"] },
+                      "$amount",
+                      0,
+                    ],
+                  },
+                },
+                totalAdjustIn: {
+                  $sum: {
+                    $cond: [
+                      { $eq: ["$transactiontype", "adjustin"] },
+                      "$amount",
+                      0,
+                    ],
+                  },
+                },
+                totalAdjustOut: {
+                  $sum: {
+                    $cond: [
+                      { $eq: ["$transactiontype", "adjustout"] },
+                      "$amount",
+                      0,
+                    ],
+                  },
+                },
+              },
+            },
+          ]),
+          // Cross Day Revert Deposits
+          Deposit.find({
+            status: "reverted",
+            reverted: true,
+            bankname: { $ne: "User Wallet" },
+            createdAt: { $gte: startOfDay, $lte: endOfDay },
+            updatedAt: { $gt: endOfDay },
+          }).select("amount bankAmount"),
+          // Cross Day Revert Withdraws
+          Withdraw.find({
+            status: "reverted",
+            reverted: true,
+            bankname: { $ne: "User Wallet" },
+            createdAt: { $gte: startOfDay, $lte: endOfDay },
+            updatedAt: { $gt: endOfDay },
+          }).select("amount bankAmount"),
+          // Bank Balance at end of day
+          getBankBalanceAtDate(endOfDay),
+          // Bank Balance at end of previous day
+          getBankBalanceAtDate(endOfPrevDay),
+        ]);
+
+        const deposit = Math.round((depositStats[0]?.total || 0) * 100) / 100;
+        const withdraw = Math.round((withdrawStats[0]?.total || 0) * 100) / 100;
+        const bankFee = Math.round((feeStats[0]?.total || 0) * 100) / 100;
+        const bonus = Math.round((bonusStats[0]?.total || 0) * 100) / 100;
+        const nett = Math.round((deposit - withdraw - bankFee) * 100) / 100;
+        const transaction = transactionCount[0] + transactionCount[1];
+
+        const cashIn = Math.round((cashStats[0]?.totalCashIn || 0) * 100) / 100;
+        const cashOut =
+          Math.round((cashStats[0]?.totalCashOut || 0) * 100) / 100;
+        const adjustIn =
+          Math.round((cashStats[0]?.totalAdjustIn || 0) * 100) / 100;
+        const adjustOut =
+          Math.round((cashStats[0]?.totalAdjustOut || 0) * 100) / 100;
+
+        const crossDayRevertDepositTotal =
+          Math.round(
+            crossDayRevertDeposits.reduce(
+              (sum, d) => sum + (d.bankAmount || d.amount),
+              0
+            ) * 100
+          ) / 100;
+        const crossDayRevertWithdrawTotal =
+          Math.round(
+            crossDayRevertWithdraws.reduce(
+              (sum, w) => sum + (w.bankAmount || w.amount),
+              0
+            ) * 100
+          ) / 100;
+
+        // Active players (unique deposit + withdraw players)
+        const depositPlayers = depositStats[0]?.uniquePlayers || [];
+        const withdrawPlayers = withdrawStats[0]?.uniquePlayers || [];
+        const activePlayer = [
+          ...new Set([...depositPlayers, ...withdrawPlayers]),
+        ].length;
+
+        // Bank Balance Change
+        const bankBalanceChange =
+          Math.round((bankBalanceEnd - bankBalancePrev) * 100) / 100;
+
+        const dayReport = {
+          date: currentDate.format("DD/MM/YYYY"),
+          deposit,
+          withdraw: -withdraw,
+          bankFee: -bankFee,
+          nett,
+          bonus,
+          transaction,
+          activePlayer,
+          newDeposit: newDepositCount,
+          register: registerCount,
+          cashIn,
+          cashOut,
+          adjustIn,
+          adjustOut,
+          crossDayRevertDeposit: crossDayRevertDepositTotal,
+          crossDayRevertWithdraw: crossDayRevertWithdrawTotal,
+          bankBalanceStart: bankBalancePrev,
+          bankBalanceEnd,
+          bankBalanceChange,
+        };
+
+        dailyReports.push(dayReport);
+
+        // Add to totals
+        totals.deposit += deposit;
+        totals.withdraw += withdraw;
+        totals.bankFee += bankFee;
+        totals.nett += nett;
+        totals.bonus += bonus;
+        totals.transaction += transaction;
+        totals.newDeposit += newDepositCount;
+        totals.register += registerCount;
+        totals.cashIn += cashIn;
+        totals.cashOut += cashOut;
+        totals.adjustIn += adjustIn;
+        totals.adjustOut += adjustOut;
+        totals.crossDayRevertDeposit += crossDayRevertDepositTotal;
+        totals.crossDayRevertWithdraw += crossDayRevertWithdrawTotal;
+      }
+
+      // Round totals
+      Object.keys(totals).forEach((key) => {
+        if (typeof totals[key] === "number") {
+          totals[key] = Math.round(totals[key] * 100) / 100;
+        }
+      });
+
+      // Get first and last bank balance for the month
+      const firstDayStart = startOfMonth
+        .clone()
+        .subtract(1, "day")
+        .endOf("day")
+        .utc()
+        .toDate();
+      const lastDayEnd = moment
+        .tz(
+          `${year}-${paddedMonth}-${daysInRange.toString().padStart(2, "0")}`,
+          "YYYY-MM-DD",
+          timezone
+        )
+        .endOf("day")
+        .utc()
+        .toDate();
+
+      const [bankBalanceMonthStart, bankBalanceMonthEnd] = await Promise.all([
+        getBankBalanceAtDate(firstDayStart),
+        getBankBalanceAtDate(lastDayEnd),
+      ]);
+
+      res.status(200).json({
+        success: true,
+        message: "Monthly daily report retrieved successfully",
+        data: {
+          year,
+          month: paddedMonth,
+          days: daysInRange,
+          dailyReports,
+          totals: {
+            ...totals,
+            withdraw: -totals.withdraw,
+            bankFee: -totals.bankFee,
+          },
+          bankBalance: {
+            start: bankBalanceMonthStart,
+            end: bankBalanceMonthEnd,
+            change:
+              Math.round((bankBalanceMonthEnd - bankBalanceMonthStart) * 100) /
+              100,
+          },
+        },
+      });
+    } catch (error) {
+      console.error("Error getting monthly daily report:", error);
+      res.status(500).json({
+        success: false,
+        message: "Internal server error",
+        error: error.toString(),
+      });
+    }
+  }
+);
+
+// https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
+
+// 货币
+const CURRENCY = "PGK";
+
+// 发送 Telegram 图片的函数
+const sendTelegramPhoto = async (imagePath, caption) => {
+  try {
+    const form = new FormData();
+    form.append("chat_id", TELEGRAM_CHAT_ID);
+    form.append("photo", fs.createReadStream(imagePath));
+    if (caption) {
+      form.append("caption", caption);
+      form.append("parse_mode", "HTML");
+    }
+
+    const response = await axios.post(
+      `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto`,
+      form,
+      {
+        headers: {
+          ...form.getHeaders(),
+        },
+      }
+    );
+
+    return response.data;
+  } catch (error) {
+    console.error(
+      "Error sending Telegram photo:",
+      error.response?.data || error.message
+    );
+    throw error;
+  }
+};
+
+// 格式化数字（不带小数点）
+const formatInteger = (num) => {
+  return num.toLocaleString("en-US", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  });
+};
+
+// 格式化数字（带小数点）
+const formatNumber = (num) => {
+  return num.toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+};
+
+// 生成月报表格图片
+const generateMonthlyReportImage = async (
+  dailyReports,
+  totals,
+  bankBalance,
+  year,
+  month,
+  endDay
+) => {
+  const paddedMonth = month.toString().padStart(2, "0");
+
+  // 高清比例（1 = 普通，2 = 2倍高清，3 = 3倍高清）
+  const scale = 4;
+
+  // 表格配置
+  const columns = [
+    { key: "date", header: "DATE", width: 75, type: "text" },
+    { key: "deposit", header: "DEPOSIT", width: 110, type: "currency" },
+    { key: "withdraw", header: "WITHDRAW", width: 110, type: "currency" },
+    { key: "bankFee", header: "FEE", width: 80, type: "currency" },
+    { key: "nett", header: "NETT", width: 110, type: "currency" },
+    { key: "bonus", header: "BONUS", width: 100, type: "currency" },
+    { key: "transaction", header: "TXN", width: 45, type: "integer" },
+    { key: "activePlayer", header: "ACTIVE", width: 50, type: "integer" },
+    { key: "newDeposit", header: "NEW DEP", width: 55, type: "integer" },
+    { key: "register", header: "REG", width: 40, type: "integer" },
+    { key: "cashIn", header: "CASH IN", width: 95, type: "currency" },
+    { key: "cashOut", header: "CASH OUT", width: 95, type: "currency" },
+    { key: "adjustIn", header: "ADJ IN", width: 95, type: "currency" },
+    { key: "adjustOut", header: "ADJ OUT", width: 95, type: "currency" },
+    {
+      key: "crossDayRevertDeposit",
+      header: "CD REV DEP",
+      width: 95,
+      type: "currency",
+    },
+    {
+      key: "crossDayRevertWithdraw",
+      header: "CD REV WD",
+      width: 95,
+      type: "currency",
+    },
+    { key: "bankBalanceEnd", header: "BANK BAL", width: 115, type: "currency" },
+  ];
+
+  const rowHeight = 26;
+  const headerHeight = 35;
+  const logoHeight = 100;
+  const padding = 15;
+
+  const totalWidth =
+    columns.reduce((sum, col) => sum + col.width, 0) + padding * 2;
+  const totalHeight =
+    logoHeight +
+    headerHeight +
+    rowHeight * (dailyReports.length + 1) +
+    padding * 2;
+
+  // 创建高清 canvas
+  const canvas = createCanvas(totalWidth * scale, totalHeight * scale);
+  const ctx = canvas.getContext("2d");
+
+  // 缩放 context
+  ctx.scale(scale, scale);
+
+  // 背景
+  ctx.fillStyle = "#f0f0f0";
+  ctx.fillRect(0, 0, totalWidth, totalHeight);
+
+  // 加载 Logo 和标题区域
+  const { loadImage } = require("canvas");
+  try {
+    const logo = await loadImage(
+      "https://pub-f13c596dc380459ba094af43a93b3afa.r2.dev/megapng.png"
+    );
+
+    // 三栏布局
+    const sectionWidth = (totalWidth - padding * 2) / 3;
+
+    // 第一栏：标题（左边）
+    ctx.fillStyle = "#1a365d";
+    ctx.font = "bold 24px Arial";
+    ctx.fillText(`MONTHLY REPORT`, padding, padding + 35);
+    ctx.font = "bold 16px Arial";
+    ctx.fillText(
+      `${paddedMonth}/${year} (Day 1-${endDay})`,
+      padding,
+      padding + 55
+    );
+
+    // 第二栏：Logo（居中）
+    const logoWidth = 200;
+    const logoAspectRatio = logo.height / logo.width;
+    const logoDisplayHeight = logoWidth * logoAspectRatio;
+    const logoX = padding + sectionWidth + (sectionWidth - logoWidth) / 2;
+    const logoY = padding + (logoHeight - logoDisplayHeight) / 2;
+    ctx.drawImage(logo, logoX, logoY, logoWidth, logoDisplayHeight);
+  } catch (error) {
+    console.error("Error loading logo:", error);
+    ctx.fillStyle = "#1a365d";
+    ctx.font = "bold 24px Arial";
+    ctx.fillText(
+      `MONTHLY REPORT - ${paddedMonth}/${year} (Day 1-${endDay})`,
+      padding,
+      padding + 35
+    );
+  }
+
+  let currentY = logoHeight + padding;
+
+  // 表头背景
+  ctx.fillStyle = "#1a5f2a";
+  ctx.fillRect(padding, currentY, totalWidth - padding * 2, headerHeight);
+
+  // 表头文字
+  ctx.fillStyle = "#ffffff";
+  ctx.font = "bold 9px Arial";
+  let currentX = padding;
+  columns.forEach((col) => {
+    ctx.fillText(col.header, currentX + 3, currentY + 22);
+    currentX += col.width;
+  });
+
+  currentY += headerHeight;
+
+  // 数据行
+  dailyReports.forEach((row, index) => {
+    // 交替行背景
+    ctx.fillStyle = index % 2 === 0 ? "#f0fff4" : "#ffffff";
+    ctx.fillRect(padding, currentY, totalWidth - padding * 2, rowHeight);
+
+    // 数据
+    ctx.font = "9px Arial";
+    currentX = padding;
+
+    columns.forEach((col) => {
+      let value = row[col.key];
+
+      if (col.key === "date") {
+        value = row.date;
+        ctx.fillStyle = "#2d3748";
+      } else if (col.type === "currency") {
+        if (typeof value === "number") {
+          if (value < 0) {
+            ctx.fillStyle = "#e53e3e";
+          } else {
+            ctx.fillStyle = "#2d3748";
+          }
+          value = `${CURRENCY} ${formatNumber(value)}`;
+        }
+      } else if (col.type === "integer") {
+        ctx.fillStyle = "#2d3748";
+        if (typeof value === "number") {
+          value = formatInteger(value);
+        }
+      } else {
+        ctx.fillStyle = "#2d3748";
+      }
+
+      ctx.fillText(String(value), currentX + 3, currentY + 17);
+      currentX += col.width;
+    });
+
+    currentY += rowHeight;
+  });
+
+  // Total 行背景
+  ctx.fillStyle = "#1a5f2a";
+  ctx.fillRect(padding, currentY, totalWidth - padding * 2, rowHeight);
+
+  // Total 数据
+  ctx.fillStyle = "#ffffff";
+  ctx.font = "bold 9px Arial";
+  currentX = padding;
+
+  const totalRow = {
+    date: "TOTAL",
+    deposit: totals.deposit,
+    withdraw: totals.withdraw,
+    bankFee: totals.bankFee,
+    nett: totals.nett,
+    bonus: totals.bonus,
+    transaction: totals.transaction,
+    activePlayer: "-",
+    newDeposit: totals.newDeposit,
+    register: totals.register,
+    cashIn: totals.cashIn,
+    cashOut: totals.cashOut,
+    adjustIn: totals.adjustIn,
+    adjustOut: totals.adjustOut,
+    crossDayRevertDeposit: totals.crossDayRevertDeposit,
+    crossDayRevertWithdraw: totals.crossDayRevertWithdraw,
+    bankBalanceEnd: bankBalance.end,
+  };
+
+  columns.forEach((col) => {
+    let value = totalRow[col.key];
+    if (col.type === "currency" && typeof value === "number") {
+      value = `${CURRENCY} ${formatNumber(value)}`;
+    } else if (col.type === "integer" && typeof value === "number") {
+      value = formatInteger(value);
+    }
+    ctx.fillText(String(value), currentX + 3, currentY + 17);
+    currentX += col.width;
+  });
+
+  // 确保 temp 目录存在
+  const tempDir = path.join(__dirname, "../temp");
+  if (!fs.existsSync(tempDir)) {
+    fs.mkdirSync(tempDir, { recursive: true });
+  }
+
+  // 保存图片
+  const imagePath = path.join(
+    tempDir,
+    `monthly_report_${year}_${paddedMonth}.png`
+  );
+  const buffer = canvas.toBuffer("image/png");
+  fs.writeFileSync(imagePath, buffer);
+
+  console.log(`Image saved to: ${imagePath}`);
+
+  return imagePath;
+};
+
+// 获取月报数据的函数
+const getMonthlyReportData = async (year, month, endDay) => {
+  const timezone = "Asia/Kuala_Lumpur";
+  const paddedMonth = month.toString().padStart(2, "0");
+
+  const dailyReports = [];
+  const totals = {
+    deposit: 0,
+    withdraw: 0,
+    bankFee: 0,
+    nett: 0,
+    bonus: 0,
+    transaction: 0,
+    newDeposit: 0,
+    register: 0,
+    cashIn: 0,
+    cashOut: 0,
+    adjustIn: 0,
+    adjustOut: 0,
+    crossDayRevertDeposit: 0,
+    crossDayRevertWithdraw: 0,
+  };
+
+  const getBankBalanceAtDate = async (endDate) => {
+    const bankBalances = await BankTransactionLog.aggregate([
+      {
+        $match: {
+          bankName: { $not: /test/i },
+          createdAt: { $lte: endDate },
+        },
+      },
+      { $sort: { createdAt: -1 } },
+      {
+        $group: {
+          _id: {
+            bankName: "$bankName",
+            bankAccount: "$bankAccount",
+            ownername: "$ownername",
+          },
+          lastBalance: { $first: "$currentBalance" },
+        },
+      },
+    ]);
+    const total = bankBalances.reduce(
+      (sum, b) => sum + (b.lastBalance || 0),
+      0
+    );
+    return Math.round(total * 100) / 100;
+  };
+
+  for (let day = 1; day <= endDay; day++) {
+    const paddedDay = day.toString().padStart(2, "0");
+    const currentDate = moment.tz(
+      `${year}-${paddedMonth}-${paddedDay}`,
+      "YYYY-MM-DD",
+      timezone
+    );
+
+    const startOfDay = currentDate.clone().startOf("day").utc().toDate();
+    const endOfDay = currentDate.clone().endOf("day").utc().toDate();
+
+    const dateFilter = {
+      createdAt: {
+        $gte: startOfDay,
+        $lte: endOfDay,
+      },
+    };
+
+    const [
+      depositStats,
+      withdrawStats,
+      feeStats,
+      bonusStats,
+      transactionCount,
+      newDepositCount,
+      registerCount,
+      cashStats,
+      crossDayRevertDeposits,
+      crossDayRevertWithdraws,
+      bankBalanceEnd,
+    ] = await Promise.all([
+      Deposit.aggregate([
+        {
+          $match: {
+            status: "approved",
+            reverted: false,
+            bankname: { $ne: "User Wallet" },
+            ...dateFilter,
+          },
+        },
+        {
+          $group: {
+            _id: null,
+            total: { $sum: { $ifNull: ["$bankAmount", "$amount"] } },
+            uniquePlayers: { $addToSet: "$username" },
+          },
+        },
+      ]),
+      Withdraw.aggregate([
+        {
+          $match: {
+            status: "approved",
+            reverted: false,
+            bankname: { $ne: "User Wallet" },
+            ...dateFilter,
+          },
+        },
+        {
+          $group: {
+            _id: null,
+            total: { $sum: { $ifNull: ["$bankAmount", "$amount"] } },
+            uniquePlayers: { $addToSet: "$username" },
+          },
+        },
+      ]),
+      BankTransactionLog.aggregate([
+        {
+          $match: {
+            bankName: { $not: /test/i },
+            transactiontype: { $in: ["transactionfee", "transaction fees"] },
+            ...dateFilter,
+          },
+        },
+        { $group: { _id: null, total: { $sum: "$amount" } } },
+      ]),
+      Bonus.aggregate([
+        {
+          $match: {
+            status: "approved",
+            reverted: false,
+            ...dateFilter,
+          },
+        },
+        { $group: { _id: null, total: { $sum: "$amount" } } },
+      ]),
+      Promise.all([
+        Deposit.countDocuments({
+          status: "approved",
+          reverted: false,
+          bankname: { $ne: "User Wallet" },
+          ...dateFilter,
+        }),
+        Withdraw.countDocuments({
+          status: "approved",
+          reverted: false,
+          bankname: { $ne: "User Wallet" },
+          ...dateFilter,
+        }),
+      ]),
+      Deposit.countDocuments({
+        newDeposit: true,
+        status: "approved",
+        reverted: false,
+        ...dateFilter,
+      }),
+      User.countDocuments(dateFilter),
+      BankTransactionLog.aggregate([
+        {
+          $match: {
+            bankName: { $not: /test/i },
+            transactiontype: {
+              $in: ["cashin", "cashout", "adjustin", "adjustout"],
+            },
+            ...dateFilter,
+          },
+        },
+        {
+          $group: {
+            _id: null,
+            totalCashIn: {
+              $sum: {
+                $cond: [{ $eq: ["$transactiontype", "cashin"] }, "$amount", 0],
+              },
+            },
+            totalCashOut: {
+              $sum: {
+                $cond: [{ $eq: ["$transactiontype", "cashout"] }, "$amount", 0],
+              },
+            },
+            totalAdjustIn: {
+              $sum: {
+                $cond: [
+                  { $eq: ["$transactiontype", "adjustin"] },
+                  "$amount",
+                  0,
+                ],
+              },
+            },
+            totalAdjustOut: {
+              $sum: {
+                $cond: [
+                  { $eq: ["$transactiontype", "adjustout"] },
+                  "$amount",
+                  0,
+                ],
+              },
+            },
+          },
+        },
+      ]),
+      Deposit.find({
+        status: "reverted",
+        reverted: true,
+        bankname: { $ne: "User Wallet" },
+        createdAt: { $gte: startOfDay, $lte: endOfDay },
+        updatedAt: { $gt: endOfDay },
+      }).select("amount bankAmount"),
+      Withdraw.find({
+        status: "reverted",
+        reverted: true,
+        bankname: { $ne: "User Wallet" },
+        createdAt: { $gte: startOfDay, $lte: endOfDay },
+        updatedAt: { $gt: endOfDay },
+      }).select("amount bankAmount"),
+      getBankBalanceAtDate(endOfDay),
+    ]);
+
+    const deposit = Math.round((depositStats[0]?.total || 0) * 100) / 100;
+    const withdraw = Math.round((withdrawStats[0]?.total || 0) * 100) / 100;
+    const bankFee = Math.round((feeStats[0]?.total || 0) * 100) / 100;
+    const bonus = Math.round((bonusStats[0]?.total || 0) * 100) / 100;
+    const nett = Math.round((deposit - withdraw - bankFee) * 100) / 100;
+    const transaction = transactionCount[0] + transactionCount[1];
+    const cashIn = Math.round((cashStats[0]?.totalCashIn || 0) * 100) / 100;
+    const cashOut = Math.round((cashStats[0]?.totalCashOut || 0) * 100) / 100;
+    const adjustIn = Math.round((cashStats[0]?.totalAdjustIn || 0) * 100) / 100;
+    const adjustOut =
+      Math.round((cashStats[0]?.totalAdjustOut || 0) * 100) / 100;
+    const crossDayRevertDepositTotal =
+      Math.round(
+        crossDayRevertDeposits.reduce(
+          (sum, d) => sum + (d.bankAmount || d.amount),
+          0
+        ) * 100
+      ) / 100;
+    const crossDayRevertWithdrawTotal =
+      Math.round(
+        crossDayRevertWithdraws.reduce(
+          (sum, w) => sum + (w.bankAmount || w.amount),
+          0
+        ) * 100
+      ) / 100;
+
+    // Active players
+    const depositPlayers = depositStats[0]?.uniquePlayers || [];
+    const withdrawPlayers = withdrawStats[0]?.uniquePlayers || [];
+    const activePlayer = [...new Set([...depositPlayers, ...withdrawPlayers])]
+      .length;
+
+    // Daily report - 直接用 bankBalanceEnd，不做调整
+    dailyReports.push({
+      date: currentDate.format("DD/MM/YYYY"),
+      deposit,
+      withdraw: -withdraw,
+      bankFee: -bankFee,
+      nett,
+      bonus,
+      transaction,
+      activePlayer,
+      newDeposit: newDepositCount,
+      register: registerCount,
+      cashIn,
+      cashOut,
+      adjustIn,
+      adjustOut,
+      crossDayRevertDeposit: crossDayRevertDepositTotal,
+      crossDayRevertWithdraw: crossDayRevertWithdrawTotal,
+      bankBalanceEnd,
+    });
+
+    // Add to totals
+    totals.deposit += deposit;
+    totals.withdraw += withdraw;
+    totals.bankFee += bankFee;
+    totals.nett += nett;
+    totals.bonus += bonus;
+    totals.transaction += transaction;
+    totals.newDeposit += newDepositCount;
+    totals.register += registerCount;
+    totals.cashIn += cashIn;
+    totals.cashOut += cashOut;
+    totals.adjustIn += adjustIn;
+    totals.adjustOut += adjustOut;
+    totals.crossDayRevertDeposit += crossDayRevertDepositTotal;
+    totals.crossDayRevertWithdraw += crossDayRevertWithdrawTotal;
+  }
+
+  // Round totals
+  Object.keys(totals).forEach((key) => {
+    if (typeof totals[key] === "number") {
+      totals[key] = Math.round(totals[key] * 100) / 100;
+    }
+  });
+
+  // Get bank balance for month start and end
+  const startOfMonth = moment.tz(
+    `${year}-${paddedMonth}-01`,
+    "YYYY-MM-DD",
+    timezone
+  );
+  const endOfLastDay = moment
+    .tz(
+      `${year}-${paddedMonth}-${endDay.toString().padStart(2, "0")}`,
+      "YYYY-MM-DD",
+      timezone
+    )
+    .endOf("day")
+    .utc()
+    .toDate();
+  const endOfPrevMonth = startOfMonth
+    .clone()
+    .subtract(1, "day")
+    .endOf("day")
+    .utc()
+    .toDate();
+
+  const [bankBalanceStart, bankBalanceEnd] = await Promise.all([
+    getBankBalanceAtDate(endOfPrevMonth),
+    getBankBalanceAtDate(endOfLastDay),
+  ]);
+
+  return {
+    dailyReports,
+    totals: {
+      ...totals,
+      withdraw: -totals.withdraw,
+      bankFee: -totals.bankFee,
+    },
+    bankBalance: {
+      start: bankBalanceStart,
+      end: bankBalanceEnd,
+      change: Math.round((bankBalanceEnd - bankBalanceStart) * 100) / 100,
+    },
+  };
+};
+
+// API: 手动发送月报图片到 Telegram
+router.post(
+  "/admin/api/send-monthly-report-telegram",
+  authenticateAdminToken,
+  async (req, res) => {
+    try {
+      const { year, month, endDay } = req.body;
+
+      if (!year || !month) {
+        return res.status(400).json({
+          success: false,
+          message: "Please provide year and month",
+        });
+      }
+
+      const timezone = "Asia/Kuala_Lumpur";
+      const paddedMonth = month.toString().padStart(2, "0");
+
+      // 如果没提供 endDay，用昨天或月底
+      let actualEndDay = endDay;
+      if (!actualEndDay) {
+        const today = moment.tz(timezone);
+        const endOfMonth = moment
+          .tz(`${year}-${paddedMonth}-01`, "YYYY-MM-DD", timezone)
+          .endOf("month");
+
+        if (today.format("YYYY-MM") === `${year}-${paddedMonth}`) {
+          actualEndDay = today.subtract(1, "day").date();
+        } else {
+          actualEndDay = endOfMonth.date();
+        }
+      }
+
+      const data = await getMonthlyReportData(year, month, actualEndDay);
+      const imagePath = await generateMonthlyReportImage(
+        data.dailyReports,
+        data.totals,
+        data.bankBalance,
+        year,
+        month,
+        actualEndDay
+      );
+
+      const telegramResult = await sendTelegramPhoto(imagePath);
+
+      // 删除临时图片
+      fs.unlinkSync(imagePath);
+
+      res.status(200).json({
+        success: true,
+        message: "Monthly report image sent to Telegram",
+        data: {
+          report: data,
+          telegram: telegramResult,
+        },
+      });
+    } catch (error) {
+      console.error("Error sending monthly report to Telegram:", error);
+      res.status(500).json({
+        success: false,
+        message: "Internal server error",
+        error: error.toString(),
+      });
+    }
+  }
+);
+
+// 一次性运行 - 关闭 Preston Amoko 银行账户
+router.post(
+  "/admin/api/close-bank-account",
+  authenticateAdminToken,
+  async (req, res) => {
+    try {
+      // 19/12/2025 23:59:00 UTC+8 = 19/12/2025 15:59:00 UTC
+      const closeDate = moment
+        .tz("2025-12-19 23:59:00", "YYYY-MM-DD HH:mm:ss", "Asia/Kuala_Lumpur")
+        .utc()
+        .toDate();
+
+      const closeBankLog = new BankTransactionLog({
+        transactionId: "bank-closed-preston-amoko-" + Date.now(),
+        bankName: "BSP",
+        ownername: "Preston Amoko",
+        bankAccount: "0000865701(302)",
+        remark: "Bank account closed - balance cleared",
+        lastBalance: 80,
+        currentBalance: 0,
+        processby: "system",
+        transactiontype: "bankclosed",
+        amount: 80,
+        createdAt: closeDate,
+        updatedAt: closeDate,
+      });
+      await closeBankLog.save();
+
+      res.status(200).json({
+        success: true,
+        message: "Bank account closed successfully",
+        data: closeBankLog,
+      });
+    } catch (error) {
+      console.error("Error closing bank account:", error);
+      res.status(500).json({
+        success: false,
+        message: "Internal server error",
+        error: error.toString(),
+      });
+    }
+  }
+);
+
+// Cron Job: 每天 UTC+8 00:05 自动发送月报图片
+if (process.env.NODE_ENV !== "development") {
+  cron.schedule(
+    "5 0 * * *",
+    async () => {
+      try {
+        const timezone = "Asia/Kuala_Lumpur";
+        const yesterday = moment.tz(timezone).subtract(1, "day");
+        const dayBefore = moment.tz(timezone).subtract(2, "day");
+
+        const year = yesterday.format("YYYY");
+        const month = yesterday.format("MM");
+        const endDay = yesterday.date();
+
+        const date1 = dayBefore.format("YYYY-MM-DD");
+        const date2 = yesterday.format("YYYY-MM-DD");
+        console.log(`Checking daily balance for ${date2}...`);
+        const endOfDate1 = moment
+          .tz(date1, "Asia/Kuala_Lumpur")
+          .endOf("day")
+          .utc()
+          .toDate();
+        const endOfDate2 = moment
+          .tz(date2, "Asia/Kuala_Lumpur")
+          .endOf("day")
+          .utc()
+          .toDate();
+        const startOfDate1 = moment
+          .tz(date1, "Asia/Kuala_Lumpur")
+          .startOf("day")
+          .utc()
+          .toDate();
+        const startOfDate2 = moment
+          .tz(date2, "Asia/Kuala_Lumpur")
+          .startOf("day")
+          .utc()
+          .toDate();
+
+        const getBalancesAtDate = async (endDate) => {
+          const bankBalances = await BankTransactionLog.aggregate([
+            {
+              $match: {
+                bankName: { $not: /test/i },
+                createdAt: { $lte: endDate },
+              },
+            },
+            { $sort: { createdAt: -1 } },
+            {
+              $group: {
+                _id: {
+                  bankName: "$bankName",
+                  bankAccount: "$bankAccount",
+                  ownername: "$ownername",
+                },
+                lastBalance: { $first: "$currentBalance" },
+                lastTransactionDate: { $first: "$createdAt" },
+              },
+            },
+            {
+              $project: {
+                _id: 0,
+                bankName: "$_id.bankName",
+                bankAccount: "$_id.bankAccount",
+                ownername: "$_id.ownername",
+                balance: { $round: ["$lastBalance", 2] },
+                lastTransactionDate: 1,
+              },
+            },
+            { $sort: { ownername: 1 } },
+          ]);
+
+          const total = bankBalances.reduce((sum, b) => sum + b.balance, 0);
+          const totalBalance = Math.round(total * 100) / 100;
+
+          return {
+            banks: bankBalances,
+            totalBalance,
+          };
+        };
+
+        const dateFilter2 = {
+          createdAt: {
+            $gte: startOfDate2,
+            $lte: endOfDate2,
+          },
+        };
+
+        const [depositStats, withdrawStats, feeStats, cashStats] =
+          await Promise.all([
+            Deposit.aggregate([
+              {
+                $match: {
+                  status: "approved",
+                  reverted: false,
+                  bankname: { $ne: "User Wallet" },
+                  ...dateFilter2,
+                },
+              },
+              {
+                $group: {
+                  _id: null,
+                  totalDeposit: {
+                    $sum: { $ifNull: ["$bankAmount", "$amount"] },
+                  },
+                },
+              },
+            ]),
+            Withdraw.aggregate([
+              {
+                $match: {
+                  status: "approved",
+                  reverted: false,
+                  bankname: { $ne: "User Wallet" },
+                  ...dateFilter2,
+                },
+              },
+              {
+                $group: {
+                  _id: null,
+                  totalWithdraw: {
+                    $sum: { $ifNull: ["$bankAmount", "$amount"] },
+                  },
+                },
+              },
+            ]),
+            BankTransactionLog.aggregate([
+              {
+                $match: {
+                  bankName: { $not: /test/i },
+                  transactiontype: {
+                    $in: ["transactionfee", "transaction fees"],
+                  },
+                  ...dateFilter2,
+                },
+              },
+              {
+                $group: { _id: null, totalTransactionFee: { $sum: "$amount" } },
+              },
+            ]),
+            BankTransactionLog.aggregate([
+              {
+                $match: {
+                  bankName: { $not: /test/i },
+                  transactiontype: {
+                    $in: ["cashin", "cashout", "adjustin", "adjustout"],
+                  },
+                  ...dateFilter2,
+                },
+              },
+              {
+                $group: {
+                  _id: null,
+                  totalCashIn: {
+                    $sum: {
+                      $cond: [
+                        { $eq: ["$transactiontype", "cashin"] },
+                        "$amount",
+                        0,
+                      ],
+                    },
+                  },
+                  totalCashOut: {
+                    $sum: {
+                      $cond: [
+                        { $eq: ["$transactiontype", "cashout"] },
+                        "$amount",
+                        0,
+                      ],
+                    },
+                  },
+                  totalAdjustIn: {
+                    $sum: {
+                      $cond: [
+                        { $eq: ["$transactiontype", "adjustin"] },
+                        "$amount",
+                        0,
+                      ],
+                    },
+                  },
+                  totalAdjustOut: {
+                    $sum: {
+                      $cond: [
+                        { $eq: ["$transactiontype", "adjustout"] },
+                        "$amount",
+                        0,
+                      ],
+                    },
+                  },
+                },
+              },
+            ]),
+          ]);
+
+        const [date1CrossDayRevertDeposits, date1CrossDayRevertWithdraws] =
+          await Promise.all([
+            Deposit.find({
+              status: "reverted",
+              reverted: true,
+              bankname: { $ne: "User Wallet" },
+              createdAt: { $gte: startOfDate1, $lte: endOfDate1 },
+              updatedAt: { $gt: endOfDate1 },
+            }).select(
+              "transactionId username amount bankAmount createdAt updatedAt"
+            ),
+            Withdraw.find({
+              status: "reverted",
+              reverted: true,
+              bankname: { $ne: "User Wallet" },
+              createdAt: { $gte: startOfDate1, $lte: endOfDate1 },
+              updatedAt: { $gt: endOfDate1 },
+            }).select(
+              "transactionId username amount bankAmount createdAt updatedAt"
+            ),
+          ]);
+
+        const [date2CrossDayRevertDeposits, date2CrossDayRevertWithdraws] =
+          await Promise.all([
+            Deposit.find({
+              status: "reverted",
+              reverted: true,
+              bankname: { $ne: "User Wallet" },
+              createdAt: { $gte: startOfDate2, $lte: endOfDate2 },
+              updatedAt: { $gt: endOfDate2 },
+            }).select(
+              "transactionId username amount bankAmount createdAt updatedAt"
+            ),
+            Withdraw.find({
+              status: "reverted",
+              reverted: true,
+              bankname: { $ne: "User Wallet" },
+              createdAt: { $gte: startOfDate2, $lte: endOfDate2 },
+              updatedAt: { $gt: endOfDate2 },
+            }).select(
+              "transactionId username amount bankAmount createdAt updatedAt"
+            ),
+          ]);
+
+        const date1Data = await getBalancesAtDate(endOfDate1);
+        const date2Data = await getBalancesAtDate(endOfDate2);
+
+        const totalDeposit =
+          Math.round((depositStats[0]?.totalDeposit || 0) * 100) / 100;
+        const totalWithdraw =
+          Math.round((withdrawStats[0]?.totalWithdraw || 0) * 100) / 100;
+        const totalTransactionFee =
+          Math.round((feeStats[0]?.totalTransactionFee || 0) * 100) / 100;
+        const totalCashIn =
+          Math.round((cashStats[0]?.totalCashIn || 0) * 100) / 100;
+        const totalCashOut =
+          Math.round((cashStats[0]?.totalCashOut || 0) * 100) / 100;
+        const totalAdjustIn =
+          Math.round((cashStats[0]?.totalAdjustIn || 0) * 100) / 100;
+        const totalAdjustOut =
+          Math.round((cashStats[0]?.totalAdjustOut || 0) * 100) / 100;
+
+        const date1CrossDayRevertDepositTotal =
+          Math.round(
+            date1CrossDayRevertDeposits.reduce(
+              (sum, d) => sum + (d.bankAmount || d.amount),
+              0
+            ) * 100
+          ) / 100;
+        const date1CrossDayRevertWithdrawTotal =
+          Math.round(
+            date1CrossDayRevertWithdraws.reduce(
+              (sum, w) => sum + (w.bankAmount || w.amount),
+              0
+            ) * 100
+          ) / 100;
+
+        const date2CrossDayRevertDepositTotal =
+          Math.round(
+            date2CrossDayRevertDeposits.reduce(
+              (sum, d) => sum + (d.bankAmount || d.amount),
+              0
+            ) * 100
+          ) / 100;
+        const date2CrossDayRevertWithdrawTotal =
+          Math.round(
+            date2CrossDayRevertWithdraws.reduce(
+              (sum, w) => sum + (w.bankAmount || w.amount),
+              0
+            ) * 100
+          ) / 100;
+
+        const adjustedDate1Balance =
+          Math.round(
+            (date1Data.totalBalance -
+              date1CrossDayRevertDepositTotal +
+              date1CrossDayRevertWithdrawTotal) *
+              100
+          ) / 100;
+
+        const adjustedDate2Balance =
+          Math.round(
+            (date2Data.totalBalance -
+              totalCashIn +
+              totalCashOut -
+              totalAdjustIn +
+              totalAdjustOut -
+              date2CrossDayRevertDepositTotal +
+              date2CrossDayRevertWithdrawTotal) *
+              100
+          ) / 100;
+
+        const difference =
+          Math.round((adjustedDate2Balance - adjustedDate1Balance) * 100) / 100;
+        const expectedChange =
+          Math.round(
+            (totalDeposit - totalWithdraw - totalTransactionFee) * 100
+          ) / 100;
+        const isMatched = difference === expectedChange;
+        const discrepancy = isMatched
+          ? 0
+          : Math.round((difference - expectedChange) * 100) / 100;
+        const verificationData = {
+          date1: {
+            date: date1,
+            banks: date1Data.banks,
+            totalBalance: date1Data.totalBalance,
+            adjustedBalance: adjustedDate1Balance,
+            adjustmentDetails: {
+              crossDayRevertDeposit: -date1CrossDayRevertDepositTotal,
+              crossDayRevertWithdraw: date1CrossDayRevertWithdrawTotal,
+              formula: `${date1Data.totalBalance} - ${date1CrossDayRevertDepositTotal} + ${date1CrossDayRevertWithdrawTotal} = ${adjustedDate1Balance}`,
+            },
+            crossDayReverts: {
+              deposits: {
+                count: date1CrossDayRevertDeposits.length,
+                total: date1CrossDayRevertDepositTotal,
+                items: date1CrossDayRevertDeposits.map((d) => ({
+                  transactionId: d.transactionId,
+                  username: d.username,
+                  amount: d.bankAmount || d.amount,
+                  createdAt: d.createdAt,
+                  revertedAt: d.updatedAt,
+                })),
+              },
+              withdraws: {
+                count: date1CrossDayRevertWithdraws.length,
+                total: date1CrossDayRevertWithdrawTotal,
+                items: date1CrossDayRevertWithdraws.map((w) => ({
+                  transactionId: w.transactionId,
+                  username: w.username,
+                  amount: w.bankAmount || w.amount,
+                  createdAt: w.createdAt,
+                  revertedAt: w.updatedAt,
+                })),
+              },
+            },
+          },
+          date2: {
+            date: date2,
+            banks: date2Data.banks,
+            totalBalance: date2Data.totalBalance,
+            adjustedBalance: adjustedDate2Balance,
+            adjustmentDetails: {
+              cashIn: -totalCashIn,
+              cashOut: totalCashOut,
+              adjustIn: -totalAdjustIn,
+              adjustOut: totalAdjustOut,
+              crossDayRevertDeposit: -date2CrossDayRevertDepositTotal,
+              crossDayRevertWithdraw: date2CrossDayRevertWithdrawTotal,
+              formula: `${date2Data.totalBalance} - ${totalCashIn} + ${totalCashOut} - ${totalAdjustIn} + ${totalAdjustOut} - ${date2CrossDayRevertDepositTotal} + ${date2CrossDayRevertWithdrawTotal} = ${adjustedDate2Balance}`,
+            },
+            crossDayReverts: {
+              deposits: {
+                count: date2CrossDayRevertDeposits.length,
+                total: date2CrossDayRevertDepositTotal,
+                items: date2CrossDayRevertDeposits.map((d) => ({
+                  transactionId: d.transactionId,
+                  username: d.username,
+                  amount: d.bankAmount || d.amount,
+                  createdAt: d.createdAt,
+                  revertedAt: d.updatedAt,
+                })),
+              },
+              withdraws: {
+                count: date2CrossDayRevertWithdraws.length,
+                total: date2CrossDayRevertWithdrawTotal,
+                items: date2CrossDayRevertWithdraws.map((w) => ({
+                  transactionId: w.transactionId,
+                  username: w.username,
+                  amount: w.bankAmount || w.amount,
+                  createdAt: w.createdAt,
+                  revertedAt: w.updatedAt,
+                })),
+              },
+            },
+          },
+          difference,
+          verification: {
+            date: date2,
+            totalDeposit,
+            totalWithdraw,
+            totalTransactionFee,
+            totalCashIn,
+            totalCashOut,
+            totalAdjustIn,
+            totalAdjustOut,
+            expectedChange,
+            isMatched,
+            discrepancy,
+          },
+        };
+
+        if (!isMatched) {
+          const warningMessage = `
+⚠️ <b>DAILY BALANCE CHECK FAILED</b>
+📅 Date: ${date2}
+
+❌ <b>MISMATCH DETECTED</b>
+
+<b>📊 Date1 (${date1}):</b>
+├ Total Balance: ${formatCurrency(date1Data.totalBalance)}
+├ Adjusted Balance: ${formatCurrency(adjustedDate1Balance)}
+└ Formula: ${
+            date1Data.totalBalance
+          } - ${date1CrossDayRevertDepositTotal} + ${date1CrossDayRevertWithdrawTotal} = ${adjustedDate1Balance}
+
+<b>📊 Date2 (${date2}):</b>
+├ Total Balance: ${formatCurrency(date2Data.totalBalance)}
+├ Adjusted Balance: ${formatCurrency(adjustedDate2Balance)}
+└ Formula: ${
+            date2Data.totalBalance
+          } - ${totalCashIn} + ${totalCashOut} - ${totalAdjustIn} + ${totalAdjustOut} - ${date2CrossDayRevertDepositTotal} + ${date2CrossDayRevertWithdrawTotal} = ${adjustedDate2Balance}
+
+<b>💰 Verification (${date2}):</b>
+├ Deposit: ${formatCurrency(totalDeposit)}
+├ Withdraw: ${formatCurrency(totalWithdraw)}
+├ Transaction Fee: ${formatCurrency(totalTransactionFee)}
+├ Cash In: ${formatCurrency(totalCashIn)}
+├ Cash Out: ${formatCurrency(totalCashOut)}
+├ Adjust In: ${formatCurrency(totalAdjustIn)}
+├ Adjust Out: ${formatCurrency(totalAdjustOut)}
+├ Expected Change: ${formatCurrency(expectedChange)}
+├ Actual Difference: ${formatCurrency(difference)}
+└ <b>Discrepancy: ${formatCurrency(discrepancy)}</b>
+
+<b>🔄 Cross Day Reverts:</b>
+├ Date1 Deposits: ${date1CrossDayRevertDeposits.length} (${formatCurrency(
+            date1CrossDayRevertDepositTotal
+          )})
+├ Date1 Withdraws: ${date1CrossDayRevertWithdraws.length} (${formatCurrency(
+            date1CrossDayRevertWithdrawTotal
+          )})
+├ Date2 Deposits: ${date2CrossDayRevertDeposits.length} (${formatCurrency(
+            date2CrossDayRevertDepositTotal
+          )})
+└ Date2 Withdraws: ${date2CrossDayRevertWithdraws.length} (${formatCurrency(
+            date2CrossDayRevertWithdrawTotal
+          )})
+
+🔍 <b>Please check manually!</b>
+`;
+
+          await sendTelegramMessage(warningMessage);
+          console.log(
+            `Balance check failed for ${date2}, warning sent to Telegram`
+          );
+          console.log(
+            "Verification data:",
+            JSON.stringify(verificationData, null, 2)
+          );
+          return;
+        }
+        console.log(
+          `Balance check passed for ${date2}, sending monthly report...`
+        );
+        const data = await getMonthlyReportData(year, month, endDay);
+        const imagePath = await generateMonthlyReportImage(
+          data.dailyReports,
+          data.totals,
+          data.bankBalance,
+          year,
+          month,
+          endDay
+        );
+        const caption = `📊 <b>MEGAPNG Monthly Report</b>\n📅 ${month}/${year} (Day 1-${endDay})\n✅ Daily balance verified`;
+        await sendTelegramDocument(imagePath, caption);
+        fs.unlinkSync(imagePath);
+        console.log(
+          `Monthly report sent: 01/${month}/${year} - ${endDay}/${month}/${year}`
+        );
+      } catch (error) {
+        console.error("Cron job error:", error);
+        try {
+          await sendTelegramMessage(
+            `❌ <b>CRON JOB ERROR</b>\n\n${error.message}`
+          );
+        } catch (e) {
+          console.error("Failed to send error notification:", e);
+        }
+      }
+    },
+    {
+      timezone: "Asia/Kuala_Lumpur",
+    }
+  );
+}
+
 module.exports = router;
 module.exports.checkAndUpdateVIPLevel = checkAndUpdateVIPLevel;
