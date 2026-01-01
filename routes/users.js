@@ -57,7 +57,7 @@ const {
 } = require("../models/agent.model");
 const Fingerprint = require("../models/fingerprint.model");
 const path = require("path");
-const { createCanvas, loadImage } = require("canvas");
+const { createCanvas, loadImage, registerFont } = require("canvas");
 
 const dotenv = require("dotenv");
 const nodemailer = require("nodemailer");
@@ -9717,6 +9717,10 @@ const generateMonthlyReportImage = async (
     rowHeight * (dailyReports.length + 1) +
     padding * 2;
 
+  registerFont(path.join(process.cwd(), "fonts", "Roboto-Bold.ttf"), {
+    family: "Roboto",
+  });
+
   // 创建高清 canvas
   const canvas = createCanvas(totalWidth * scale, totalHeight * scale);
   const ctx = canvas.getContext("2d");
@@ -9740,9 +9744,9 @@ const generateMonthlyReportImage = async (
 
     // 第一栏：标题（左边）
     ctx.fillStyle = "#1a365d";
-    ctx.font = "bold 24px Arial";
+    ctx.font = "bold 24px Roboto";
     ctx.fillText(`MONTHLY REPORT`, padding, padding + 35);
-    ctx.font = "bold 16px Arial";
+    ctx.font = "bold 16px Roboto";
     ctx.fillText(
       `${paddedMonth}/${year} (Day 1-${endDay})`,
       padding,
@@ -9759,7 +9763,7 @@ const generateMonthlyReportImage = async (
   } catch (error) {
     console.error("Error loading logo:", error);
     ctx.fillStyle = "#1a365d";
-    ctx.font = "bold 24px Arial";
+    ctx.font = "bold 24px Roboto";
     ctx.fillText(
       `MONTHLY REPORT - ${paddedMonth}/${year} (Day 1-${endDay})`,
       padding,
@@ -9775,7 +9779,7 @@ const generateMonthlyReportImage = async (
 
   // 表头文字
   ctx.fillStyle = "#ffffff";
-  ctx.font = "bold 9px Arial";
+  ctx.font = "bold 9px Roboto";
   let currentX = padding;
   columns.forEach((col) => {
     ctx.fillText(col.header, currentX + 3, currentY + 22);
@@ -9791,7 +9795,7 @@ const generateMonthlyReportImage = async (
     ctx.fillRect(padding, currentY, totalWidth - padding * 2, rowHeight);
 
     // 数据
-    ctx.font = "9px Arial";
+    ctx.font = "9px Roboto";
     currentX = padding;
 
     columns.forEach((col) => {
@@ -9831,7 +9835,7 @@ const generateMonthlyReportImage = async (
 
   // Total 数据
   ctx.fillStyle = "#ffffff";
-  ctx.font = "bold 9px Arial";
+  ctx.font = "bold 9px Roboto";
   currentX = padding;
 
   const totalRow = {
@@ -10361,7 +10365,7 @@ router.post(
 // Cron Job: 每天 UTC+8 00:05 自动发送月报图片
 if (process.env.NODE_ENV !== "development") {
   cron.schedule(
-    "5 0 * * *",
+    "42 0 * * *",
     async () => {
       try {
         const timezone = "Asia/Kuala_Lumpur";
@@ -10873,7 +10877,7 @@ if (process.env.NODE_ENV !== "development") {
         );
 
         const caption = `📊 <b>MEGAPNG Monthly Report</b>\n📅 ${month}/${year} (Day 1-${endDay})\n✅ Daily balance verified`;
-        await sendTelegramPhoto(imagePath, caption);
+        await sendTelegramPhoto(imagePath);
         fs.unlinkSync(imagePath);
 
         console.log(
