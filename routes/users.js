@@ -9585,6 +9585,27 @@ const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 // 货币
 const CURRENCY = "PGK";
 
+const sendTelegramMessage = async (message) => {
+  try {
+    const token = process.env.TELEGRAM_BOT_TOKEN;
+    const chatId = process.env.TELEGRAM_CHAT_ID;
+
+    if (!token || !chatId) {
+      console.log("Telegram credentials not configured");
+      return;
+    }
+
+    const url = `https://api.telegram.org/bot${token}/sendMessage`;
+    await axios.post(url, {
+      chat_id: chatId,
+      text: message,
+      parse_mode: "HTML",
+    });
+  } catch (error) {
+    console.error("Failed to send Telegram message:", error.message);
+  }
+};
+
 // 发送 Telegram 图片的函数
 const sendTelegramPhoto = async (imagePath, caption) => {
   try {
@@ -10852,7 +10873,7 @@ if (process.env.NODE_ENV !== "development") {
         );
 
         const caption = `📊 <b>MEGAPNG Monthly Report</b>\n📅 ${month}/${year} (Day 1-${endDay})\n✅ Daily balance verified`;
-        await sendTelegramDocument(imagePath, caption);
+        await sendTelegramPhoto(imagePath, caption);
         fs.unlinkSync(imagePath);
 
         console.log(
