@@ -10365,7 +10365,7 @@ router.post(
 // Cron Job: 每天 UTC+8 00:05 自动发送月报图片
 if (process.env.NODE_ENV !== "development") {
   cron.schedule(
-    "42 0 * * *",
+    "5 0 * * *",
     async () => {
       try {
         const timezone = "Asia/Kuala_Lumpur";
