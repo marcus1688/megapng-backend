@@ -9780,9 +9780,10 @@ const generateMonthlyReportImage = async (
   // 表头文字
   ctx.fillStyle = "#ffffff";
   ctx.font = "bold 9px Roboto";
+  ctx.textAlign = "center";
   let currentX = padding;
   columns.forEach((col) => {
-    ctx.fillText(col.header, currentX + 3, currentY + 22);
+    ctx.fillText(col.header, currentX + col.width / 2, currentY + 22); // 改成 col.width / 2
     currentX += col.width;
   });
 
@@ -9796,6 +9797,7 @@ const generateMonthlyReportImage = async (
 
     // 数据
     ctx.font = "9px Roboto";
+    ctx.textAlign = "center"; // 添加这行
     currentX = padding;
 
     columns.forEach((col) => {
@@ -9822,7 +9824,7 @@ const generateMonthlyReportImage = async (
         ctx.fillStyle = "#2d3748";
       }
 
-      ctx.fillText(String(value), currentX + 3, currentY + 17);
+      ctx.fillText(String(value), currentX + col.width / 2, currentY + 17); // 改成 col.width / 2
       currentX += col.width;
     });
 
@@ -9836,6 +9838,7 @@ const generateMonthlyReportImage = async (
   // Total 数据
   ctx.fillStyle = "#ffffff";
   ctx.font = "bold 9px Roboto";
+  ctx.textAlign = "center";
   currentX = padding;
 
   const totalRow = {
@@ -9866,7 +9869,7 @@ const generateMonthlyReportImage = async (
     } else if (col.type === "integer" && typeof value === "number") {
       value = formatInteger(value);
     }
-    ctx.fillText(String(value), currentX + 3, currentY + 17);
+    ctx.fillText(String(value), currentX + col.width / 2, currentY + 17); // 改成 col.width / 2
     currentX += col.width;
   });
 
