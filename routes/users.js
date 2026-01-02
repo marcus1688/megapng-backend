@@ -9578,6 +9578,154 @@ router.get(
   }
 );
 
+// Admin 手动触发Check and Send Report
+router.get(
+  "/admin/api/trigger-daily-balance-check",
+  authenticateAdminToken,
+  async (req, res) => {
+    try {
+      const timezone = "Asia/Kuala_Lumpur";
+      const date2 =
+        req.query.date ||
+        moment.tz(timezone).subtract(1, "day").format("YYYY-MM-DD");
+      const date1 = moment
+        .tz(date2, "YYYY-MM-DD", timezone)
+        .subtract(1, "day")
+        .format("YYYY-MM-DD");
+      const targetDate = moment.tz(date2, "YYYY-MM-DD", timezone);
+      const year = targetDate.format("YYYY");
+      const month = targetDate.format("MM");
+      const endDay = targetDate.date();
+      console.log(`Manual trigger: Checking daily balance for ${date2}...`);
+      const token = req.headers.authorization;
+      const baseUrl =
+        process.env.BASE_URL || `http://localhost:${process.env.PORT || 3000}`;
+      const response = await axios.get(
+        `${baseUrl}admin/api/daily-balance-comparison?date1=${date1}&date2=${date2}`,
+        {
+          headers: {
+            Authorization: token,
+          },
+        }
+      );
+      const { data } = response.data;
+      const { verification } = data;
+      if (!verification.isMatched) {
+        const warningMessage = `
+⚠️ <b>DAILY BALANCE CHECK FAILED</b> (Manual Trigger)
+📅 Date: ${date2}
+
+❌ <b>MISMATCH DETECTED</b>
+
+<b>📊 Date1 (${date1}):</b>
+├ Total Balance: ${formatCurrency(data.date1.totalBalance)}
+├ Adjusted Balance: ${formatCurrency(data.date1.adjustedBalance)}
+└ Formula: ${data.date1.adjustmentDetails.formula}
+
+<b>📊 Date2 (${date2}):</b>
+├ Total Balance: ${formatCurrency(data.date2.totalBalance)}
+├ Adjusted Balance: ${formatCurrency(data.date2.adjustedBalance)}
+└ Formula: ${data.date2.adjustmentDetails.formula}
+
+<b>💰 Verification (${date2}):</b>
+├ Deposit: ${formatCurrency(verification.totalDeposit)}
+├ Withdraw: ${formatCurrency(verification.totalWithdraw)}
+├ Transaction Fee: ${formatCurrency(verification.totalTransactionFee)}
+├ Cash In: ${formatCurrency(verification.totalCashIn)}
+├ Cash Out: ${formatCurrency(verification.totalCashOut)}
+├ Adjust In: ${formatCurrency(verification.totalAdjustIn)}
+├ Adjust Out: ${formatCurrency(verification.totalAdjustOut)}
+├ Adjust Starting Balance: ${formatCurrency(
+          verification.totalAdjustStartingBalance
+        )}
+├ Expected Change: ${formatCurrency(verification.expectedChange)}
+├ Actual Difference: ${formatCurrency(data.difference)}
+└ <b>Discrepancy: ${formatCurrency(verification.discrepancy)}</b>
+
+<b>🔄 Cross Day Reverts:</b>
+├ Date1 Deposits: ${
+          data.date1.crossDayReverts.deposits.count
+        } (${formatCurrency(data.date1.crossDayReverts.deposits.total)})
+├ Date1 Withdraws: ${
+          data.date1.crossDayReverts.withdraws.count
+        } (${formatCurrency(data.date1.crossDayReverts.withdraws.total)})
+├ Date2 Deposits: ${
+          data.date2.crossDayReverts.deposits.count
+        } (${formatCurrency(data.date2.crossDayReverts.deposits.total)})
+└ Date2 Withdraws: ${
+          data.date2.crossDayReverts.withdraws.count
+        } (${formatCurrency(data.date2.crossDayReverts.withdraws.total)})
+
+<b>🔄 Cross Day Approves:</b>
+├ Date1 Deposits: ${
+          data.date1.crossDayApproves.deposits.count
+        } (${formatCurrency(data.date1.crossDayApproves.deposits.total)})
+├ Date1 Withdraws: ${
+          data.date1.crossDayApproves.withdraws.count
+        } (${formatCurrency(data.date1.crossDayApproves.withdraws.total)})
+├ Date2 Deposits: ${
+          data.date2.crossDayApproves.deposits.count
+        } (${formatCurrency(data.date2.crossDayApproves.deposits.total)})
+└ Date2 Withdraws: ${
+          data.date2.crossDayApproves.withdraws.count
+        } (${formatCurrency(data.date2.crossDayApproves.withdraws.total)})
+
+🔍 <b>Please check manually!</b>
+`;
+
+        await sendTelegramMessage(warningMessage);
+
+        return res.status(200).json({
+          success: false,
+          message: "Balance check failed, warning sent to Telegram",
+          data: {
+            date1,
+            date2,
+            isMatched: false,
+            discrepancy: verification.discrepancy,
+            verification,
+          },
+        });
+      }
+      console.log(
+        `Balance check passed for ${date2}, generating monthly report...`
+      );
+      const reportData = await getMonthlyReportData(year, month, endDay);
+      const imagePath = await generateMonthlyReportImage(
+        reportData.dailyReports,
+        reportData.totals,
+        reportData.bankBalance,
+        year,
+        month,
+        endDay
+      );
+      const caption = `📊 <b>Monthly Report</b> (Manual Trigger)\n📅 ${month}/${year} (Day 1-${endDay})\n✅ Daily balance verified`;
+      await sendTelegramPhoto(imagePath);
+      fs.unlinkSync(imagePath);
+      console.log(
+        `Monthly report sent: 01/${month}/${year} - ${endDay}/${month}/${year}`
+      );
+      res.status(200).json({
+        success: true,
+        message: "Balance check passed, monthly report sent to Telegram",
+        data: {
+          date1,
+          date2,
+          isMatched: true,
+          reportPeriod: `01/${month}/${year} - ${endDay}/${month}/${year}`,
+        },
+      });
+    } catch (error) {
+      console.error("Manual trigger error:", error);
+      res.status(500).json({
+        success: false,
+        message: "Internal server error",
+        error: error.toString(),
+      });
+    }
+  }
+);
+
 // https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
